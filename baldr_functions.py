@@ -230,9 +230,49 @@ def calibrate_phase_screen2wvl(wvl, screen):
 
 
 
-def AO_correction( pupil, screen, wvl_0, wvl, n_modes, lag, V_turb, return_in_radians=True, troubleshoot=True):
+def crop2center(a,b):
     """
     
+    crops array 'a' to size of array 'b' in centerput
+
+    Parameters
+    ----------
+    a : 2d array
+    b : 2d array 
+
+    Returns
+    -------
+    cropped a
+
+    """
+    a_cropped = a[a.shape[-1]//2-b.shape[-1]//2 : a.shape[-1]//2+b.shape[-1]//2 , a.shape[-1]//2-b.shape[-1]//2 : a.shape[-1]//2+b.shape[-1]//2 ]
+    return( a_cropped )
+
+
+
+def putinside_array(a,b):
+    """
+    overwrite the center of array a with b (but b in a)
+
+    Parameters
+    ----------
+    a : 2d array
+    b : 2d array 
+
+    Returns
+    -------
+    b centered in a
+    """
+    #a=a.copy()
+    a[a.shape[-1]//2-b.shape[-1]//2 : a.shape[-1]//2+b.shape[-1]//2 , a.shape[-1]//2-b.shape[-1]//2 : a.shape[-1]//2+b.shape[-1]//2 ] = b
+    
+    return(a)
+
+
+
+def AO_correction( pupil, screen, wvl_0, wvl, n_modes, lag, V_turb, return_in_radians=True, troubleshoot=True):
+    """
+    basic AO correction used in the naomi_simulation that assumes temporal errors dominate WFS residuals.
 
     Parameters
     ----------
@@ -331,62 +371,13 @@ def AO_correction( pupil, screen, wvl_0, wvl, n_modes, lag, V_turb, return_in_ra
             return( corrected_opd ) #, DM_opd, then_opd) )
         
 
-
-
-
-"""def run_naomi_simulation( parameter_dict = {pupil, screen, wvl_0, wvl, n_modes, lag, V_turb}):
-    
-     pupil, screen, wvl_0, wvl, n_modes, lag, V_turb
-     
-     return_in_radians=True,troubleshoot=True"""
      
      
-
-
-def crop2center(a,b):
-    """
-    
-    crops array 'a' to size of array 'b' in centerput
-
-    Parameters
-    ----------
-    a : 2d array
-    b : 2d array 
-
-    Returns
-    -------
-    cropped a
-
-    """
-    a_cropped = a[a.shape[-1]//2-b.shape[-1]//2 : a.shape[-1]//2+b.shape[-1]//2 , a.shape[-1]//2-b.shape[-1]//2 : a.shape[-1]//2+b.shape[-1]//2 ]
-    return( a_cropped )
-
-
-
-def putinside_array(a,b):
-    """
-    overwrite the center of array a with b (but b in a)
-
-    Parameters
-    ----------
-    a : 2d array
-    b : 2d array 
-
-    Returns
-    -------
-    b centered in a
-    """
-    #a=a.copy()
-    a[a.shape[-1]//2-b.shape[-1]//2 : a.shape[-1]//2+b.shape[-1]//2 , a.shape[-1]//2-b.shape[-1]//2 : a.shape[-1]//2+b.shape[-1]//2 ] = b
-    
-    return(a)
-
-
 
 def naomi_simulation(parameter_dict, sim_time = 0.01, wvl_list= [1.65e-6], save = False, saveAs = None):
     
     """
-    simulate AO systemfor sim_time (generally used for simulating naomi) 
+    simulate AO system for sim_time (generally used for simulating naomi - assuming temporal errors dominate WFS residuals) 
 
     Parameters
     ----------
@@ -536,6 +527,8 @@ def naomi_simulation(parameter_dict, sim_time = 0.01, wvl_list= [1.65e-6], save 
 
 def baldr_simulation( naomi_screens , parameter_dict, save = False, saveAs = None):
     """
+    simulation of Baldr - A Zernike wavefront sensor for ASGARD
+    
     Parameters
     ----------
     naomi_screens : fits file
@@ -565,7 +558,6 @@ def baldr_simulation( naomi_screens , parameter_dict, save = False, saveAs = Non
         parameter_dict['glass_on'] = string, material of on-axis region 
         parameter_dict['phase_mask_rad'] = float, radias of phase shift region at wfs central wvl (units = lambda/D) 
         parameter_dict['achromatic_diffraction'] = boolean, if all wavelengths diffract to the same lambda_0/D  (this is stufy the effect of wvl dependent spatial distribution of phase shift)
-        [NOTE I SHOULD CHANGE phase_mask_rad TO PHYSICAL UNITS ]
         
         # parameters calculated based on input spectrum.:
         parameter_dict['redness_ratio']: float, ratio of number of photons above primary wvl (wvl_0) / number of photons below primary wvl (wvl_0) in wfs bandwidth
@@ -705,7 +697,7 @@ def baldr_simulation( naomi_screens , parameter_dict, save = False, saveAs = Non
         phi_est = zelda_phase_estimator_1(Ic_adu, pup, N_ph_T, dx, A, B,  abs( b_est ), theta, exp_order=1) #radians 
         
         # convert phase estimate to DM OPD at wvl_0
-        DM_cmd = wvl_0 / (2*np.pi) * phi_est   # NEED TO HOLD THIS IN A LIST I CAN POP IN
+        DM_cmd = wvl_0 / (2*np.pi) * phi_est  
         
         # add new cmd to end of the list 
         DM_cmd_list = DM_cmd_list + [DM_cmd]
