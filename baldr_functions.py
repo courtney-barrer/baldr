@@ -7,8 +7,7 @@ Created on Thu Nov 24 03:30:37 2022
 
 
 
-
-""""""
+"""
 
 
 
@@ -32,7 +31,7 @@ import glob
 from astroquery.simbad import Simbad
 from matplotlib import gridspec
 import aotools
-
+from scipy.stats import poisson
 
 
 def nglass(l, glass='sio2'):
@@ -262,10 +261,10 @@ def AO_correction( pupil, screen, wvl_0, wvl, n_modes, lag, V_turb, return_in_ra
     if pupil.shape[0] > screen.scrn.shape[0]:
         raise ValueError('pupil is bigger then input phase screen')
     
-
-    dx = screen.pixel_scale
     
     basis = zernike.zernike_basis(n_modes, npix=pupil.shape[0])
+
+    dx = screen.pixel_scale
 
     V_pix = V_turb / dx # how many pixels to jump per second 
     
@@ -384,10 +383,10 @@ def putinside_array(a,b):
 
 
 
-def AO_simulation(parameter_dict, sim_time = 0.01, wvl_list= [1.65e-6], save = False, saveAs = None):
+def naomi_simulation(parameter_dict, sim_time = 0.01, wvl_list= [1.65e-6], save = False, saveAs = None):
     
     """
-    simulate AO systemfor sim_time
+    simulate AO systemfor sim_time (generally used for simulating naomi) 
 
     Parameters
     ----------
@@ -462,7 +461,8 @@ def AO_simulation(parameter_dict, sim_time = 0.01, wvl_list= [1.65e-6], save = F
     
     for i in range(no_iterations):
         
-        phase_screen.add_row()
+        for jjj in range(jumps): # these jumps are don in AO_correction() but only on copy of phase screen (because we do it for each ewvl) .. so we apply them here outside of wvl loop
+            phase_screen.add_row()
 
         for w, wvl in enumerate(wvl_list):
             
@@ -508,17 +508,20 @@ def AO_simulation(parameter_dict, sim_time = 0.01, wvl_list= [1.65e-6], save = F
         
         hdu.header.set('what is', 'AO corrected phase screens (rad)' , 'at lambda = {}um'.format(round(wvl*1e6,3)))
         hdu.header.set('simulation time', sim_time, 'simulation time (s)')
+        hdu.header.set('dt', dt, 'phase screen sampling rate')
+        hdu.header.set('wvl', wvl, 'wvl (m) where currrent phase screen is calc. ')
+        
         hdu.header.set('seeing', seeing, 'arcsec')
         hdu.header.set('L0', L0, 'outerscale (m)')
+        hdu.header.set('V_turb', V_turb, 'velocity of phase screen (m/s)')
+        
+        hdu.header.set('pupil_geometry', pupil_geometry, 'Valid options are AT, UT, disk')
         hdu.header.set('D', D, 'telescope diameter (m)')
         hdu.header.set('D_pix', D_pix, '#pixels across telescope diameter')
-        hdu.header.set('wvl_0', wvl_0, 'central wavelentgth of WFS (m)')
-        hdu.header.set('wvl', wvl, 'wvl (m) where corrected phase screen is calc. ')
-        hdu.header.set('n_modes', n_modes, '#N modes sensed & corrected by AO system')
-        hdu.header.set('lag', lag, 'latency of AO system (s)')
-        hdu.header.set('V_turb', V_turb, 'velocity of phase screen (m/s)')
-        hdu.header.set('pupil_geometry', pupil_geometry, 'Valid options are AT, UT, disk')
-        hdu.header.set('dt', dt, 'phase screen sampling rate')
+        
+        hdu.header.set('NAOMI wvl_0', wvl_0, 'central wavelentgth of WFS (m)')
+        hdu.header.set('NAOMI n_modes', n_modes, '#modes sensed & corrected by NAOMI')
+        hdu.header.set('NAOMI lag', lag, 'latency of NAOMI (s)')
     
         simulation_fits.append( hdu )
     
@@ -531,28 +534,258 @@ def AO_simulation(parameter_dict, sim_time = 0.01, wvl_list= [1.65e-6], save = F
 
 
 
+def baldr_simulation( naomi_screens , parameter_dict, save = False, saveAs = None):
+    """
+    Parameters
+    ----------
+    naomi_screens : fits file
+        DESCRIPTION. fits file with timeseries of NAOMI corrected phase screens at various wavelengths
+        (hint: naomi_screens should be the output of naomi_simulation() function )
+        
+        
+    parameter_dict :   dictionary
+    
+        parameter_dict['baldr_min_wvl'] - float , minimum wavelength (m) that baldr wfs is sensitive to
+        parameter_dict['baldr_max_wvl'] - float, maximum wavelength (m) that baldr wfs is sensitive to
+        parameter_dict['baldr_wvl_0'] - float, primary wavelength (m) of baldr WFS where correction is optimized. This should be within baldr_min_wvl - baldr_max_wvl
+        parameter_dict['f_ratio'] - float indicating the  f ratio of Zernike wfs 
+        parameter_dict['DIT'] - float indicating the detector integration time of wfs  
+        parameter_dict['processing_latency'] - float indicating the latency of baldr wfs 
+        parameter_dict['RON'] - float, read out noise of baldr wfs detector
+        
+        parameter_dict['input_spectrum_wvls'] - array ike with wavelengths that input spectrum is calculated at 
+        parameter_dict['input_spectrum_ph/m2/wvl/s']  - array ike with input spectrum 
+        
+        parameter_dict['target_phase_shift'] - float, the target phase shift (deg) to optimize phase mask depths for ()
+        parameter_dict['T_off'] = float (0-1), phase mask off-axis transmission (outside phase shift region)
+        parameter_dict['T_on'] = float (0-1), phase mask on-axis transmission (in phase shift region)
+        parameter_dict['d_off'] = float, phase mask off-axis depth (m) 
+        parameter_dict['d_on'] = float, phase mask on-axis depth (m) 
+        parameter_dict['glass_off'] = string, material of off-axis region 
+        parameter_dict['glass_on'] = string, material of on-axis region 
+        parameter_dict['phase_mask_rad'] = float, radias of phase shift region at wfs central wvl (units = lambda/D) 
+        parameter_dict['achromatic_diffraction'] = boolean, if all wavelengths diffract to the same lambda_0/D  (this is stufy the effect of wvl dependent spatial distribution of phase shift)
+        [NOTE I SHOULD CHANGE phase_mask_rad TO PHYSICAL UNITS ]
+        
+        # parameters calculated based on input spectrum.:
+        parameter_dict['redness_ratio']: float, ratio of number of photons above primary wvl (wvl_0) / number of photons below primary wvl (wvl_0) in wfs bandwidth
+        parameter_dict['total_flux_in_wfs[ph/s/m2]']: float, total number of photons within 
+        parameter_dict['spectral_classification_in_wfs'] : float 'flat'
+            
+
+    Returns
+    -------
+    fits file with timeseries of Baldr corrected phase screens at input phase screen wavelengths (defined in naomi_screens) fits file
+
+    """
+
+    input_screens = copy.deepcopy(naomi_screens) # to get parameters from 
+    
+    baldr_screens = copy.deepcopy(naomi_screens) # another copy to avoid editing original while assigning 
+    
+    wvl_0 = parameter_dict['baldr_wvl_0']  # primary wavelength (m) of baldr WFS where correction is optimized. Rhis should be within baldr_min_wvl - baldr_max_wvl
+    
+    input_wvls = np.array( [it.header['wvl'] for it in input_screens] )
+    
+    wvl_indx_4_wfs = [i for i,w in enumerate(input_wvls) if (w >= parameter_dict['baldr_min_wvl'] ) & (w <= parameter_dict['baldr_max_wvl'] ) ]
+    
+    wvl_0_indx = np.argmin(abs(wvl_0 - input_wvls))
+    
+    #abbreviated phase mask parameters 
+    A = parameter_dict['T_off']
+    B = parameter_dict['T_on']
+    
+    # time between sensing and actuation 
+    lag = parameter_dict['DIT'] + parameter_dict['processing_latency'] #s
+    
+    # time steps between input screens (assume that it is sampled uniformly )
+    dt = input_screens[0].header['dt']
+    
+    # number of frames to jump before applying correction 
+    jumps = int(round(lag / dt)) 
+        
+    #init DM_cmd_list to hold previous DM cmds up to the total system lag 
+    DM_cmd_list = list( np.zeros( jumps + 1 ) ) #(if jumps=0 list needs to be of len 1 to hold current DM command)
+    
+    for frame in range(input_screens[0].shape[0]):  # for each timestep (frame)
+        #init output intensity to zero
+        Ic = np.zeros((baldr_screens[0].header['D_pix'],baldr_screens[0].header['D_pix']))
+        N_ph_T = 0
+        
+        for wvl_indx in wvl_indx_4_wfs:  #  need to filter for valid wvls where baldr sensor operates! 
+            
+            wvl_in = baldr_screens[wvl_indx].header['wvl']
+
+            
+            # input phase screen from *NAOMI* at current wvl
+            phi = input_screens[wvl_indx].data[frame]
+            phi[~np.isfinite(phi)] = 0 # mft can't deal with nan values  - so convert to zero
+            #phi = putinside_array(np.zeros([nx_size, nx_size]), phi.copy()) #put inside new grid 
+        
+            
+            #-------- these should not depend on wvl --------------------
+            D = input_screens[wvl_indx].header['D']
+            dx = D / input_screens[wvl_indx].header['D_pix'] #m/pixels
+            f_ratio = parameter_dict['f_ratio']
+                
+            pup = pick_pupil(input_screens[wvl_indx].header['pupil_geometry'], dim=input_screens[wvl_indx].header['D_pix'], diameter=input_screens[wvl_indx].header['D_pix'] )
+            #------------------------------------------------------------
+            
+            # create function to interpolate flux to current wavelength 
+            flux_interp_fn = interp1d( parameter_dict['input_spectrum_wvls'], parameter_dict['input_spectrum_ph/m2/wvl/s']  )
+            
+            # interpolate to wvl from input photon flux and multiply by WFS DIT, differential (input) wvl element & telescope area to estimate N_ph in wvl bin
+            N_ph_wvl = parameter_dict['throughput'] * flux_interp_fn( wvl_in ) * np.diff( input_wvls )[wvl_indx-1] * parameter_dict['DIT'] * ((D/2)**2 * np.pi)
+            
+            N_ph_T += N_ph_wvl # add this to total number of photons, this is input to the estimator 
+            
+            """
+            physical radius (m) is conserved for phase mask (unless we have some chromatic lens.. we could keep radius constant lambda/D )
+            f_ratio * D * wvl_0 / D 
+            therefore scale parameter_dict['phase_mask_rad_at_wvl_0'] by wvl_0/wvl_in
+            
+            """
+            
+            if parameter_dict['achromatic_diffraction']:
+                # this case is not physically realistic but can be used to study the impact of chromatic spatial distribution of phase shift 
+                # can look at it as physical size of phase mask radius changes with wavelength to always be lambda/D
+                phase_mask_rad = parameter_dict['phase_mask_rad_at_wvl_0'] 
+                 
+            elif not parameter_dict['achromatic_diffraction']:
+                """
+                # this should be default for realistic simulations 
+                # sanity check : 
+                    phase mask rad = n lambda/D at wvl_0 
+                    => physical radius fixed: r = C * n * wvl_0 / D => at wvl : r(wvl_0) = r(wvl) = C * n * (wvl / D) * wvl_0/wvl   
+                
+                """
+                phase_mask_rad =  wvl_0/input_screens[wvl_indx].header['wvl'] * parameter_dict['phase_mask_rad_at_wvl_0']  #TO DO:  make this function of wvl such that = constant in physical radius and parameter_dict['phase_mask_rad_at_wvl_0'] (lambda/D) at wvl_0
+                
+            else:
+                raise TypeError('parameter_dict["achromatic_diffraction"] is not boolean')
+            
+            #What is phase shift of phase mask at wvl = wvl_in 
+            theta = phase_mask_phase_shift( wvl_in , d_on = parameter_dict['d_on'], d_off=parameter_dict['d_off'], glass_on = parameter_dict['glass_on'], glass_off = parameter_dict['glass_off'])
+        
+            IC_dict = I_C_analytic(A, B, theta, phase_mask_rad, phi, pup, N_ph_wvl, dx, wvl_in, D, f_ratio, troubleshooting=True) # need to changephase_mask_rad to physical radius of scale properly with wvl  if we want chromatic (not lambda /D)
+            
+            # get b at the central wavlength
+            if wvl_0_indx in wvl_indx_4_wfs:
+                
+                if wvl_indx == wvl_0_indx:
+                    
+                    b_est =  IC_dict['b'] 
+                
+            else:
+                raise TypeError('central wavelength (wvl_0) not in defined wfs wavelength range (wvl_range_wfs)')
+                
+                
+            # add intensity contribution from spectral bin 
+            Ic += IC_dict['Ic'] # + noise 
+            
+            # Now add shot noise :
+                
+            # note  that input field calculated in I_C_analytic is normalized so that sum over every pupil pixel intensity = N_phot_wvl , 
+            N_pix = np.nansum( pup ) #number of pixels in pupil 
+            # average number of photons per pixel = N_ph_wvl/N_pix  (uniform illumination assumption)
+            # therefore generate the a possion distribution (shot noise) with zero mean but var =  N_ph_wvl/N_pix  to add to output intesnity 
+            # note that this shot noise assume perfect trasmission from input pupil to output detector.. 
+            shot_noise = N_ph_wvl/N_pix - poisson.rvs( N_ph_wvl/N_pix, size= Ic.shape)  
+            Ic += shot_noise
+            # make sure there are no negative values 
+            Ic[Ic<0] = 0 
+            
+            #resample to resize pixels 
+            # --- TO DO - need to know how many pixels we reading out on 
+            
+            # after rebinning (if done) then we convert intensity to adu (integers)
+            Ic_adu = Ic.astype(int)
+            
+        # now that we have our intensity across all wfs spectral channels we can estimate the phase at wvl_0(or wherever we estimated b and theta) - we could also consider estimating b for each spectral chanel and then averaging etc 
+        phi_est = zelda_phase_estimator_1(Ic_adu, pup, N_ph_T, dx, A, B,  abs( b_est ), theta, exp_order=1) #radians 
+        
+        # convert phase estimate to DM OPD at wvl_0
+        DM_cmd = wvl_0 / (2*np.pi) * phi_est   # NEED TO HOLD THIS IN A LIST I CAN POP IN
+        
+        # add new cmd to end of the list 
+        DM_cmd_list = DM_cmd_list + [DM_cmd]
+        
+        # get rid of oldest cmd (first index)
+        DM_cmd_list.pop(0) 
+        
+        #------ now to subtract DM from input phase screen at each wavelength 
+        
+        
+        
+        
+        # I have to do this loop again bc 1st is to build DM_cmd from all wvl bins.. now to apply it to each wvl!
+        for hdu in baldr_screens: # this is for each wavelength again 
+            
+            hdu.header.set('what is', 'Naomi+Baldr AO corrected phase screens (rad)' )   
+            
+            # to do - I should also update naomi hrelated headers to reflect clearly they relate to naomi !!
+            hdu.header.set( 'BALDR wfs_wvl_min' , parameter_dict['baldr_min_wvl']  , ' minimum wavelength (m) in baldr wfs')
+            hdu.header.set( 'BALDR wfs_wvl_max' , parameter_dict['baldr_max_wvl']  , ' maximum wavelength (m) in baldr wfs')
+            hdu.header.set( 'BALDR wvl_0', parameter_dict['baldr_wvl_0'], 'primary wavelentgth of Baldr WFS (m) where correction is optimizzed')
+            hdu.header.set( 'BALDR wvl_c', (parameter_dict['baldr_max_wvl']  +  parameter_dict['baldr_min_wvl'] )/2, 'central wavelentgth of Baldr WFS (m)')
+            hdu.header.set( 'BALDR wfs_bandwidth' , round( 100 * 2*(parameter_dict['baldr_max_wvl']  -  parameter_dict['baldr_min_wvl'] ) / (parameter_dict['baldr_max_wvl']  +  parameter_dict['baldr_min_wvl'] ), 2) , 'baldr wfs badwidth [%]')
+            
+            hdu.header.set( 'BALDR f_ratio' , parameter_dict['f_ratio'] , ' f ratio of ZWFS')
+            hdu.header.set( 'BALDR DIT' , parameter_dict['DIT'] , 'baldr wfs detector integration time (s)')
+            hdu.header.set( 'BALDR latency' , parameter_dict['DIT'] , 'baldr latency after detector integration (s) ')
+            hdu.header.set( 'BALDR RON' , parameter_dict['RON'] , 'baldr detector read out noise [e-]')
+            hdu.header.set( 'BALDR throughput' , parameter_dict['throughput'] , '% of input flux that makes it to baldr wfs (assumes no wvl dependence)')
+            
+            hdu.header.set( 'T_off', parameter_dict['T_off'] , 'phase mask off-axis transmission (outside phase shift region)')
+            hdu.header.set( 'T_on', parameter_dict['T_on'] , 'phase mask on-axis transmission (in phase shift region)')
+            hdu.header.set( 'd_off', parameter_dict['d_off'] , 'phase mask off-axis depth (m) ')
+            hdu.header.set( 'd_on' , parameter_dict['d_on'] , 'phase mask on-axis depth (m) ')
+            hdu.header.set( 'glass_off', parameter_dict['glass_off'] , 'material of off-axis region in phase mask')
+            hdu.header.set( 'glass_on', parameter_dict['glass_on'] , 'material of on-axis region in phase mask')
+            
+            hdu.header.set( 'target_phase_shift', parameter_dict['target_phase_shift'] , 'target phase shift (deg) when optimizing depths across bandpass')
+            hdu.header.set( 'mean_phase_shift', parameter_dict['mean_phase_shift'] , 'mean phase mask phase shift (deg) within wfs bandwidth')
+            hdu.header.set( 'rmse_phase_shift', parameter_dict['rmse'] , 'rmse of target vs real phase shift (deg) across wfs bandwidth')
+            hdu.header.set( 'std_phase_shift', parameter_dict['std_phase_shift'] , 'std of phase mask phase shift (deg) within wfs bandwidth')
+            
+            hdu.header.set( 'phase_mask_rad', parameter_dict['phase_mask_rad_at_wvl_0'], 'radias of phase shift region at wfs wvl_0 (units = lambda/D) ')
+            hdu.header.set( 'achromatic_diffraction', parameter_dict['achromatic_diffraction'] , 'if all wavelengths diffract to the same lambda_0/D (default=False)' )
+            
+            # parameters calculated based on input spectrum.:
+            hdu.header.set( 'redness_ratio' , parameter_dict['redness_ratio'], 'ratio N_ph > wvl_0 / N_ph < wvl_0 in wfs bandwidth')
+            hdu.header.set( 'total_flux_in_wfs', parameter_dict['total_flux_in_wfs[ph/s/m2]'], 'total photon flux (ph/s/m2) within wfs bandwidth')
+            hdu.header.set( 'spectral_classification_in_wfs', parameter_dict['spectral_classification_in_wfs'] , 'spectral classification (flat, red, blue)')
+
+
+            wavefront_opd = hdu.header['wvl'] / (2*np.pi) * hdu.data[frame] 
+            if frame > jumps:
+                hdu.data[ frame ] =  2*np.pi /hdu.header['wvl'] * ( wavefront_opd  -  DM_cmd_list[0] )  # len( DM_cmd_list ) = jumps + 1, with index 0 being the oldest 
+
+    if save:
+        baldr_screens.writeto(saveAs,overwrite=True)
+
+    return(baldr_screens)
+
+
+
+
+
+
+
 def pick_pupil(pupil_geometry, dim, diameter ):
         
     if pupil_geometry == 'AT':
-        pup = AT_pupil(dim = D_pix, diameter = D_pix) 
+        pup = AT_pupil(dim = dim, diameter = diameter) 
     elif pupil_geometry == 'UT':
-        pup = aperture.vlt_pupil(dim = D_pix, diameter = D_pix, dead_actuator_diameter=0) 
+        pup = aperture.vlt_pupil(dim = dim, diameter =  diameter, dead_actuator_diameter=0) 
     elif pupil_geometry == 'disk':
-        pup = aperture.disc( dim = D_pix, size = D_pix//2) 
+        pup = aperture.disc( dim = dim, size = diameter//2) 
     else :
         print('no valid geometry defined (try pupil_geometry == disk, or UT, or AT\nassuming disk pupil')
-        pup = aperture.disc( dim = D_pix, size = D_pix//2) 
+        pup = aperture.disc( dim = dim, size = diameter//2) 
 
     return(pup)
 
-#%% Testing Baldr 
-
-"""
-initial thoughts 
-- set up grid
-- set up phase mask materials
-
-""" 
 
 
 
@@ -604,22 +837,25 @@ def get_plane_coord(nx_size, dx, wvl, D, f_ratio):
 
 
 
-def get_phase_shift_region(phase_mask_rad, dx , nx_size, no_lambdaD) :
+def get_phase_shift_region(phase_mask_rad, dx, D, nx_size, no_lambdaD) :
     """
     creates array defining phase shift region 
 
     Parameters
     ----------
     phase_mask_rad: float- radius of phase shift region in  #lambda/D units (i.e radius = 1 lambda /D => phase_mask_rad = 1 )
-    nx_size: int - #pixels
     dx: float - pupil plane pixel size (m)
-    
+    nx_size: int - #pixels
+    D: float, telescope diameter (m)
 
     Returns
     -------
     phase_shift_region: 2D array defining phaseshift region 
     
     """
+    
+    D_pix = int( D//dx ) # number of pixels across telescope diameter 
+    
     if phase_mask_rad  > 0:
         # phase shift region (number of pixels across radius of phase shifting region)
         f_r_pix = phase_mask_rad  *  1/2 * nx_size/D_pix * nx_size / no_lambdaD #int( np.round( phase_mask_rad * (wvl/D) / df_r  ) )
@@ -650,7 +886,7 @@ def calc_b(Psi_A, dx, wvl, D, f_ratio, phase_mask_rad , plot=False):
     Psi_B = mft.mft( Psi_A, Psi_A.shape[-1], Psi_A.shape[-1], no_lambdaD, cpix=False) # (dx / df_x)  *  mft.mft( Psi_A, Psi_A.shape[-1], Psi_A.shape[-1], no_lambdaD, cpix=False)  #mft.mft( Psi_A, Dpup, np.int(2*freq_cutoff*sampling), 2*freq_cutoff ) 
     
     # phase shift region     
-    phase_shift_region = get_phase_shift_region(phase_mask_rad, dx , nx_size, no_lambdaD) #aperture.disc(nx_size, f_r_pix) 
+    phase_shift_region = get_phase_shift_region(phase_mask_rad, dx, D, nx_size, no_lambdaD) #aperture.disc(nx_size, f_r_pix) 
     
     if plot:
         plt.figure()
@@ -679,7 +915,7 @@ def plot_phase_mask_region(pup, dx, wvl, D, f_ratio, phase_mask_rad,zoom=None):
     Psi_B =  mft.mft( pup, nx_size, nx_size, no_lambdaD, cpix=False)  #mft.mft( Psi_A, Dpup, np.int(2*freq_cutoff*sampling), 2*freq_cutoff ) 
     
     # phase shift region     
-    phase_shift_region = get_phase_shift_region(phase_mask_rad, dx , nx_size, no_lambdaD)
+    phase_shift_region = get_phase_shift_region(phase_mask_rad, dx, D, nx_size, no_lambdaD)
     
     plt.figure()
     plt.plot( f_r[nx_size//2-zoom:nx_size//2+zoom]  / (wvl/D), abs ( Psi_B  )[nx_size//2, nx_size//2-zoom:nx_size//2+zoom]/np.max(abs ( Psi_B  ) ) ,label='PSF')
@@ -728,7 +964,7 @@ def I_C_sim(A, B, theta, phase_mask_rad, phi, pup, N_ph, dx, wvl, D, f_ratio):
     Psi_A = N_ph * pup * np.exp(1j * phi)
     
     # phase shift region     
-    phase_shift_region = get_phase_shift_region(phase_mask_rad, dx , nx_size, no_lambdaD)
+    phase_shift_region = get_phase_shift_region(phase_mask_rad, dx, D, nx_size, no_lambdaD)
     
     #phase mask filter 
     H = A*(1 + (B/A * np.exp(1j * theta) - 1) * phase_shift_region  )  
@@ -738,6 +974,7 @@ def I_C_sim(A, B, theta, phase_mask_rad, phi, pup, N_ph, dx, wvl, D, f_ratio):
     
     
     return(Psi_A, Psi_B, Psi_C, H)
+
 
 
 def I_C_analytic(A, B, theta, phase_mask_rad, phi, pup, N_ph, dx, wvl, D, f_ratio, troubleshooting=False):
@@ -785,7 +1022,7 @@ def I_C_analytic(A, B, theta, phase_mask_rad, phi, pup, N_ph, dx, wvl, D, f_rati
     I_C = abs(Psi_C)**2
     
     if troubleshooting:
-        data_dict = {'Ic':I_C,'Psi_C':Psi_C,'Psi_B':Psi_B, 'Psi_A':Psi_A,'b':b,'dx':dx,'df_x':df_x}
+        data_dict = {'Ic':I_C,'Psi_C':Psi_C, 'Psi_A':Psi_A,'b':b,'dx':dx,'df_x':df_x}
         return( data_dict )
     else:
         return(I_C)
@@ -858,6 +1095,20 @@ def phase_mask_phase_shift( wvl , d_on, d_off, glass_on, glass_off):
     return(phase_shift)
     
     
+def plot_phase_shift_dispersion( phase_mask_dict , wvls ):
+
+    thetas = np.array( [phase_mask_phase_shift( wvl , d_on = phase_mask_dict['d_on'], d_off=phase_mask_dict['d_off'], glass_on = phase_mask_dict['glass_on'], glass_off = phase_mask_dict['glass_off']) for wvl in wvls] )
+    
+    
+    plt.figure()
+    plt.plot(1e6 * wvls, 180/np.pi * thetas, color='k')
+    plt.ylabel('phase shift [deg] ',fontsize=15)
+    plt.xlabel(r'wavelength [$\mu$m]',fontsize=15)
+    plt.grid()
+    plt.gca().tick_params(labelsize=15)
+    plt.show()
+    
+    
 def calculate_don( wvl ,desired_phase_shift,  d_off, glass_on, glass_off):
     """
 
@@ -885,674 +1136,510 @@ def calculate_don( wvl ,desired_phase_shift,  d_off, glass_on, glass_off):
     
     opd = desired_phase_shift / (2 * np.pi / wvl)
     
-    don = (opd + d_off * ( n_off-n_air )) / ( n_off-n_air )
+    don = (opd + d_off * ( n_off-n_air )) / ( n_on-n_air )
 
     return (don)
     
-    
 
 
-#%% Testing NAOMI 
+# I need a function that given phase_mask_dict materials, desired_phase_shift , wvl range, optimizes depths to minimize rmse from desired_phase_shift 
 
-#for wvl in np.linspace(1.2e-6 , 1.9e-6, 10):
-naomi_parameter_dict_1 = {'seeing':1 , 'L0':25, 'D':1.8, 'D_pix':2**8, \
-                        'wvl_0':0.658e-6,'n_modes':14,\
-                            'lag':5e-3,'V_turb':40, 'pupil_geometry': 'AT',\
-                                'dt': 0.3 * 1e-3}
-    
-sim_time = 0.1 #s  
-wvl_list = np.linspace(0.9e-6,  2.0e-6,  20)
-
-naomi_screens = AO_simulation(naomi_parameter_dict_1, sim_time = sim_time, wvl_list=wvl_list, save = True, saveAs = '/Users/bcourtne/Documents/ANU_PHD2/heimdallr/naomi_screens_sim_1.fits')
-
-
-"""
-# test1. check strehl or rms changes with wvl for same timestamp 
-# test2. check for given timestamp that each wvl dependent phase screen has same structure (only scaling difference)
-
-"""
-
-#test1
-wvl_indx = 0
-print( 'RMSE as function of wvl ', [np.nanstd( naomi_screens[wvl_indx].data[0] - naomi_screens[i].data[0]) for i in range(len(naomi_screens))] )
-# 1st index of list should be zero! Passed
-
-#test2
-i=0
-wvl_indx = 0
-plt.figure()
-plt.imshow( naomi_screens[wvl_indx].data[i] )
-plt.axis('off')
-plt.title( 'Example phase screen at {}um\nStrehl = {}'.format(round(1e6 * naomi_screens[wvl_indx].header['wvl'],2), round(np.exp(-np.nanvar(naomi_screens[wvl_indx].data[i])) ,2)) )
-   
-
-i=0
-wvl_indx = -1
-plt.figure()
-plt.imshow( naomi_screens[wvl_indx].data[i] )
-plt.axis('off')
-plt.title( 'Example phase screen at {}um\nStrehl = {}'.format(round(1e6 * naomi_screens[wvl_indx].header['wvl'],2), round(np.exp(-np.nanvar(naomi_screens[wvl_indx].data[i])) ,2)) )
-
-
-"""strehl_tmp = []
-for i in range(200):
-    #plt.figure()
-    #plt.imshow( naomi_screens[wvl_indx].data[i] )
-    strehl_tmp.append(np.exp(-np.nanvar(naomi_screens[wvl_indx].data[i])) )
-"""
-
-
-#%%
-# Testing Baldr 
-
-# with NAOMI need to simulate phase screens at Baldr WFS wavelengths and also at Bifrost J-band coupling wavelengths 
-
-# To do: write input parameter dictonary , baldr correction function with lag etc / shot noise http://spiff.rit.edu/classes/phys445/lectures/readout/readout.html
-## function to get optical depth. /calculate phase shift as fn of wvl  as function of wavelength for phase_shift region + outer region 
-# phi estimator has to become function of wvl!!!
-
-"""
-phase_mask_dict 
-======
-T_off = phase mask off-axis transmission (outside phase shift region)
-T_on = phase mask on-axis transmission (in phase shift region)
-d_off = phase mask off-axis depth (m) 
-d_on = phase mask on-axis depth (m) 
-glass_off = material of off-axis region 
-glass_on = material of on-axis region 
-phase_mask_rad = radias of phase shift region (units = lambda/D)
-"""                        
-phase_mask_dict = {'T_off':1,'T_on':1,'d_off':2e-6, 'd_on':np.nan, 'glass_off':'sio2', 'glass_on':'sio2','phase_mask_rad_at_wvl_0':1}
-
-"""
-Note Chromatic phase mask:
-    glass_on = 'sio2'
-    d_on = 32um
-    glass_off = 'su8'
-    d_off=26.27um
-
-"""
-
-input_spectrum = {'wvl':np.linspace(0.9e-6,2e-6,100), 'ph/m2/wvl':1e9 * np.ones(100) } # photons per m2/wvl
-
-baldr_dict = {'wvl_range_wfs':[1.5e-6, 1.8e-6], 'f_ratio':20, 'dt':1e-3, 'DIT':2e-3, 'processing_latency':1e-3, 'RON':2}
-
-input_wvls = [it.header['wvl'] for it in naomi_screens]
-
-wvl_0 = 1.65e-6  # central wvl of baldr wfs 
-
-    
-# phase mask 
-# =============
-#    calculate the phase shift 
-phase_mask_dict['d_on'] = calculate_don( wvl = wvl_0 ,desired_phase_shift = np.pi/2,  d_off = phase_mask_dict['d_off'], glass_on = phase_mask_dict['glass_on'], glass_off=phase_mask_dict['glass_off'])
-
-# establish phase mask design parameters
-theta = phase_mask_phase_shift( wvl = wvl_0 , d_on=phase_mask_dict['d_on'], d_off=phase_mask_dict['d_off'], glass_on=phase_mask_dict['glass_on'], glass_off=phase_mask_dict['glass_off'])
-A = phase_mask_dict['T_off']
-B = phase_mask_dict['T_on']
-
-    
-#init output intensity to zero
-Ic = np.zeros((naomi_screens[0].header['D_pix'],naomi_screens[0].header['D_pix']))
-N_ph_T = 0
-#wvl_indx=0
-for wvl_indx in range(len(naomi_screens)):  # I probably need to filter for valid wvls where baldr sensor operates! 
-    
-    wvl_in = naomi_screens[wvl_indx].header['wvl']
-    phi = naomi_screens[wvl_indx].data[0]
-    #-------- these should not depend on wvl --------------------
-    D = naomi_screens[wvl_indx].header['D']
-    dx = D / naomi_screens[wvl_indx].header['D_pix'] #m/pixels
-    f_ratio = baldr_dict['f_ratio']
-        
-    pup = pick_pupil(naomi_screens[wvl_indx].header['pupil_geometry'], dim=naomi_screens[wvl_indx].header['D_pix'], diameter=naomi_screens[wvl_indx].header['D_pix'] )
-    #------------------------------------------------------------
-    
-    flux_interp_fn = interp1d( input_spectrum['wvl'], input_spectrum['ph/m2/wvl']  )
-    
-    # interpolate to wvl from input photon flux and multiply by differential (input) wvl element & telescope area to estimate N_ph in wvl bin
-    N_ph_wvl = flux_interp_fn( wvl_in ) * np.diff( input_wvls )[wvl_indx-1] * ((D/2)**2 *np.pi)
-    N_ph_T += N_ph_wvl # add this to total number of photons
-
-    phase_mask_rad =  phase_mask_dict['phase_mask_rad_at_wvl_0']  #TO DO:  make this function of wvl such that = constant in physical radius and phase_mask_dict['phase_mask_rad_at_wvl_0'] (lambda/D) at wvl_0
-
-    IC_dict = I_C_analytic(A, B, theta, phase_mask_rad, phi, pup, N_ph_wvl, dx, wvl_in, D, f_ratio, troubleshooting=True) # need to changephase_mask_rad to physical radius of scale properly with wvl  if we want chromatic (not lambda /D)
-    
-    # add noise (to do!)
-    Ic += IC_dict['Ic'] # + noise 
-    
-    
-    #resample to resize pixels 
-    # --- TO DO - need to know how many pixels we reading out on 
-    
-#which B do we use?? ) 
-phi_est = zelda_phase_estimator_1(Ic, pup, N_ph_T, dx, A, B,  abs( IC_dict['b'] ), theta, exp_order=1)
-
-
-print( np.nanstd(phi - phi_est ), np.nanstd(phi) )
-
-
-#%%
-
-
-
-#N_ph_wvl_in = np.trapz( flux_interp_fn(input_wvls) * ( (D/2)**2 * np.pi ) , input_wvls)
-
-
-"""
-input_dict 
-======
-D = telescope diameter  (m)
-D_pix = number of pixels across telescope diameter 
-pupil_geometry = what pupil do we have? AT, UT, disk?
-wvl_in = wavelength (m) of the input phase screen (this will be wvl where baldr calculates correction )
-wvl_out = wavelength (m) where the output phase screen is calculated of the input phase screen
-N_ph_wvl_in = number of input photons per second at wavelength = wvl_in  
-N_ph_wvl_out = number of input photons per second at wavelength = wvl_out 
-dt = sampling time of input phase screens
-"""
-
-input_dict = {'D':naomi_screens.header['D'], 'D_pix':naomi_screens.header['D_pix'] ,\
-                        'wvl_in':naomi_screens.header['wvl'],\
-                            'wvl_out':1.35e-6, 'pupil_geometry': naomi_screens.header['pupil_geometry'],\
-                                'N_ph_wvl_in':1e6, 'N_ph_wvl_out':1e6,'dt_input':naomi_screens.header['dt'],\
-                                    'f_ratio':10}
-    
-    
-                            
-"""
-phase_mask_dict 
-======
-T_off = phase mask off-axis transmission (outside phase shift region)
-T_on = phase mask on-axis transmission (in phase shift region)
-d_off = phase mask off-axis depth (m) 
-d_on = phase mask on-axis depth (m) 
-glass_off = material of off-axis region 
-glass_on = material of on-axis region 
-phase_mask_rad = radias of phase shift region (units = lambda/D)
-"""                        
-phase_mask_dict = {'T_off':1,'T_on':1,'d_off':2e-6, 'd_on':np.nan, 'glass_off':'sio2', 'glass_on':'sio2','phase_mask_rad':1}
-
-"""
-Note Chromatic phase mask:
-    glass_on = 'sio2'
-    d_on = 32um
-    glass_off = 'su8'
-    d_off=26.27um
-
-"""
-
-baldr_dict = {'wvl_range'[1.5e-6, 1.8e-6], 'dt':1e-3,'DIT':2e-3, 'processing_latency':1e-3, 'RON':2}
-
-
-
-
-
-# input 
-# =============
-phi = naomi_screens.data[0]
-
-wvl_in = input_dict['wvl_in'] 
-pup = pick_pupil(input_dict['pupil_geometry'], dim=input_dict['D_pix'], diameter=input_dict['D_pix'] )
-N_ph_wvl_in = input_dict['N_ph_wvl_in']
-
-D = input_dict['D']
-dx = D / input_dict['D_pix'] #m/pixels
-f_ratio = input_dict['f_ratio']
-
-# phase mask 
-# =============
-#    calculate the phase shift 
-phase_mask_dict['d_on'] = calculate_don( wvl = input_dict['wvl_in'] ,desired_phase_shift = np.pi/2,  d_off = phase_mask_dict['d_off'], glass_on = phase_mask_dict['glass_on'], glass_off=phase_mask_dict['glass_off'])
-
-theta = phase_mask_phase_shift( wvl =  input_dict['wvl_in'] , d_on=phase_mask_dict['d_on'], d_off=phase_mask_dict['d_off'], glass_on=phase_mask_dict['glass_on'], glass_off=phase_mask_dict['glass_off'])
-A = phase_mask_dict['T_off']
-B = phase_mask_dict['T_on']
-phase_mask_rad =  phase_mask_dict['phase_mask_rad']  # need to change this to physical radius if we want chromatic (not lambda /D)
-
-
-
-
-
-#for all wavelengths  we create intensity 
-
-# measurement of output intensity 
-Nph_T = N_ph_wvl_in * baldr_dict['DIT']
-
-
-
-IC_dict = I_C_analytic(A, B, theta, phase_mask_rad, phi, pup, Nph_T, dx, wvl_in, D, f_ratio, troubleshooting=True)
-
-# add noise (to do!)
-Ic = IC_dict['Ic'] # + noise 
-
-
-
-
-#get phase estimator 
-phi_est = zelda_phase_estimator_1(Ic, pup, N_ph_wvl_in, dx, A, B,  abs( IC_dict['b'] ), theta, exp_order=1)
-
-#subtract of a few phase screens 
-
-    
-
-"""
-For each input wavelength across baldr wfs we get one output intensity array. 
-These can each be added up to give one OPD correction 
-we then apply some lag to the input phase screen 
-then apply OPD correction to input phase screen at wvl_out 
-
-"""
-
-    
-
-    
-    
-
-    
-    
-
-D = naomi_screens.header['D']
-dx = D / naomi_screens.header['D_pix'] #m/pixels
-wvl = 1.65e-6 
-f_ratio = 2 # f/D
-N_ph = 1e6 #1e6 
-nx_size = naomi_screens.header['D_pix']
-
-pup = pick_pupil(naomi_screens.header['pupil_geometry'], dim=naomi_screens.header['D_pix'], diameter=naomi_screens.header['D_pix'] )
-pup = putinside_array(np.zeros([nx_size, nx_size]), pup.copy())
-
-# inputs to ZWFS
-phi = naomi_screens.data[0]
-phi[~np.isfinite(phi)] = 0 # mft can't deal with nan values  - so convert to zero
-phi = putinside_array(np.zeros([nx_size, nx_size]), phi.copy()) #put inside new grid 
-
-
-# Mask
-A=1
-B=1
-theta= np.pi/3 # function that takes wvl , design (material, depths), and returns phase shift
-phase_mask_rad = 1 
-
-# I need a then IC and a now Psi_a, also add shot noise onto it 
-I_dict = I_C_analytic(A, B, theta, phase_mask_rad, phi, pup, N_ph, dx, wvl, D, f_ratio, troubleshooting=True)
-b = I_dict['b']
-
-phi_est = zelda_phase_estimator_1(I_dict['Ic'], pup, N_ph, dx, A, B,  abs(b), theta, exp_order=1)
-
-
-plt.figure()
-plt.plot(phi[pup>0.5],phi_est[pup>0.5],  '.' ,label='simulation 1st order')
-plt.plot(phi_est[pup>0.5],phi_est[pup>0.5], label='1:1')
-plt.ylabel('estimate phase ')
-plt.xlabel('real phase ')
-plt.legend()
-
-
-print('check conservation \n dx**2 * sum sum Psi_A**2 = {} photons \n df_x**2  * sum sum Psi_B**2 = {} photons'.format(I_dict['dx']**2*sum(sum(abs(I_dict['Psi_A'] )**2)), I_dict['df_x']**2*sum(sum(abs(I_dict['Psi_B'] )**2))) ) 
-
-print('also dx**2*sum(sum(abs(Psi_C)**2)) = {} photons\n this is not necessarily conserved for small phase shift region\n since phase mask diffracts light outside pupil'.format(I_dict['dx']**2*sum(sum(abs(I_dict['Psi_C'] )**2))))
-#print('\n1.22 lambda/D = {}arcsec'.format(round(1.22*wvl/D*rad2arcsec,4)))
-
-#%%
-
-Psi_A, Psi_B, Psi_C, H = I_C_sim(A, B, theta, phase_mask_rad, phi, pup, N_ph, dx, wvl, D, f_ratio)
-
-
-
-
-
-
-
-# ------- load NAOMI phase screens 
-phi_screens = fits.open('/Users/bcourtne/Documents/ANU_PHD2/heimdallr/naomi_screens_sim_1.fits')
-# ------- prelims 
-wvl= 1.65e-6  #1.25e-6 #wavelength (m)
-D = 1.8 # telescope diameter (m)
-f_ratio = 10
-nx_size = 2**11 #number of pixels in input pupil grid 
-D_pix =  phi_screens[0].data[1].shape[0] #2**8#2**8 #number of pixels across telescope diameter 
-dx = D/D_pix  # diff element (pixel size) pupil plane (m)
-N_ph = 1e9 # number of photons
-
-pup = aperture.disc(nx_size,  D_pix//2) # AT_pupil(dim = nx_size, diameter =  D_pix)
-
-A = 1 #phase mask non-phase shift region transmission 
-B = 0.5 #phase mask phase shift region transmission 
-theta = np.pi/3.9  # phase mask phase shift 
-phase_mask_rad = 1 # phase mask phase shift region radius (# wvl/D)
-
-basis = zernike.zernike_basis(nterms=10, npix = D_pix) 
-
-#phase screen OPD in units (m). Check <np.exp(-(np.pi*2/1.65e-6)**2 * np.nanvar(phi_screens[0].data[1]))>~0.6 (H-strehl=0.6)
-# what wavelength are these simulated in 
-
-
-phi = 2*np.pi/wvl * phi_screens[0].data[1] 
-phi[~np.isfinite(phi)] = 0 # mft can't deal with nan values  - so convert to zero
-phi = putinside_array(np.zeros(pup.shape), phi.copy()) #put inside new grid 
-
-# get coordinates in pupil and focal plane 
-x, f_x, df_x, f_r, df_r, no_lambdaD = get_plane_coord(nx_size, dx, wvl, D, f_ratio)
-
-#Psi_A = pup * N_ph * np.exp(1j * phi)  #
-Psi_A = pup * N_ph * np.exp(1j * phi)
-
-#normalize so that sum over every pupil pixel intensity = N_phot (total number of photons)
-#therefore pupil_field(Nx,Ny) = number of photons within pixel (or equivilantly photons / m^2 considering pixel finite area dfX^2)
-Psi_A *= np.sqrt((N_ph/np.nansum(abs(Psi_A)*dx**2))) #* Psi_A * pup
-# parameter b 
-
-# input field in pupil
-#Psi_A = pup * np.exp(1j * phi_tmp)
-
-# b  parameter 
-b = calc_b(Psi_A, dx, wvl, D, f_ratio, phase_mask_rad )
-
-
-I_C, Psi_A, Psi_C = I_C_analytic(A, B, theta, phase_mask_rad, phi, pup, dx, wvl, D, f_ratio)
-
-# estimator assuming abs b
-phi_est = pup * zelda_phase_estimator_1(I_C, pup, A, B, 1.5*abs(b)/N_ph, theta, exp_order=1)
-
-plt.figure()
-plt.plot(phi_est[pup>0.5], phi[pup>0.5], '.' ,label='simulation 1st order')
-plt.plot(phi_est[pup>0.5],phi_est[pup>0.5], label='1:1')
-plt.ylabel('estimate phase ')
-plt.xlabel('real phase ')
-plt.legend()
-
-phi_reco = crop2center( phi_est , phi_screens[0].data[1])
-phi_corrected = crop2center( phi_est - phi , phi_screens[0].data[1])
-
-
-fig,ax = plt.subplots(1,3)
-ax[0].imshow( crop2center( phi , phi_screens[0].data[1]) )
-ax[0].set_title('phi real')
-ax[1].imshow( phi_reco  )
-ax[1].set_title('phi reco')
-ax[2].imshow( phi_corrected  )
-ax[2].set_title('corrected')
-
-
-ax[0].text(phi_reco.shape[0]//2, phi_reco.shape[0]//2, 'S={}'.format(round( np.exp( - np.nanvar( crop2center( phi, phi_screens[0].data[1]) ) ) , 2)), color='white')
-#ax[2].text(250,250,'S={}'.format(round( np.exp( - np.nanvar( crop2center( phi_est, phi_screens[0].data[1]) ) ) , 2)))
-ax[2].text(phi_reco.shape[0]//2, phi_reco.shape[0]//2,'S={}'.format(round( np.exp( - np.nanvar( crop2center( phi-phi_est, phi_screens[0].data[1]) ) ) , 2)), color='white')
-
-for axx in ax:
-    axx.axis('off')
-
-
-
-
-
-#%% Testing old 
-seeing = 1 # arcsec
-L0 = 12 #outerscale (m)
-r0 = 0.98 * 500e-9 / np.radians(seeing/3600) #Fried parameter defined at 500nm
-D = 1.8 # telescope diameter (m)
-nx_size = 2**8 #number of pixels in input pupil grid 
-D_pix = 2**8 #2**8#2**8 #number of pixels across telescope diameter 
-dx = D/D_pix  # diff element (pixel size) pupil plane (m)
-N_ph = 1e9 # number of photons
-
-pup = AT_pupil(dim = D_pix, diameter = D_pix) 
-
-
-phase_screen = aotools.turbulence.infinitephasescreen.PhaseScreenVonKarman(nx_size, pixel_scale=dx,\
-      r0=r0 , L0=L0, n_columns=2,random_seed = 1) # radians
-    
-
-pup = AT_pupil(dim = D_pix, diameter = D_pix) 
-
-n_modes_tmp = 14
-
-
-    
-
-
-
-naomi_results=[]
-for i in range(20):
-    
-    AO_correction( pup, phase_screen, wvl_0=0.6e-6, wvl=1.65e-6, n_modes=n_modes_tmp, lag=2.5e-3, V_turb=50, return_in_radians=False, troubleshoot=False)
-    
-    naomi_results.append(  AO_correction( pup, phase_screen, wvl_0=0.6e-6, wvl=1.65e-6, n_modes=n_modes_tmp, lag=2.5e-3, V_turb=50, return_in_radians=False, troubleshoot=False) )
-
-    #store as fits files
-
-    
-    hdu = fits.PrimaryHDU( naomi_results[i] )
-
-    hdulist = fits.HDUList([hdu])
-    
-    #hdulist.writeto(f'/Users/bcourtne/Documents/ANU_PHD2/heimdallr/naomi_screens_sim_[new]_1.fits')
-
-#%%
-for i in range(len(naomi_results)):
-    plt.figure()
-    plt.imshow(naomi_results[i][0])
-    
-#%% Checks
-"""
-1. zero lag => opd_now == opd_then
-2. zero lag => DMshape Zernike coefficients = then_opd Zernike coefficients up to n_modes (slight differences could be due to spider)
-3. zero lag => variance of corrected_opd should follow (roughly) Noll indicies 
-
-"""    
-
-# TEST  1. zero lag => opd_now == opd_then
-pup = AT_pupil(dim = D_pix, diameter = D_pix) 
-my_dict = AO_correction( pup, phase_screen, wvl_0=1.6e-6, wvl=1.6e-6, n_modes=14, lag=0, V_turb=50, return_in_radians=False, troubleshoot=True)
-fig, ax = plt.subplots(1,3)
-#ax.set_title('test 2. zero lag produces perfect correction when center wvl_0=wvl\ncorrected_opd')
-ax[0].imshow(my_dict['now_opd'])
-ax[0].set_title('now OPD')
-
-ax[1].imshow(my_dict['then_opd'])
-ax[1].set_title(r'$\delta$OPD')
-ax[1].set_title('then OPD')
-
-ax[2].imshow(my_dict['then_opd']- my_dict['now_opd'])
-ax[2].set_title(r'$\delta$OPD')
-
-if np.sum(my_dict['then_opd'] != my_dict['now_opd'])==0:
-    print('TEST  1. passed')
-else:
-    print('TEST  1. failed')
-
-# TEST  2. zero lag => DMshape Zernike coefficients = then_opd Zernike coefficients up to n_modes (slight differences could be due to spider)
-
-
-n_modes_tmp = 14
-basis = zernike.zernike_basis(n_modes_tmp , npix=D_pix)
-pup = basis[0]  #AT_pupil(dim = D_pix, diameter = D_pix) 
-my_dict = AO_correction( pup, phase_screen, wvl_0=1.6e-6, wvl=1.6e-6, n_modes=n_modes_tmp, lag=0, V_turb=50, return_in_radians=False, troubleshoot=True)
-
-#note by changing the lag we can clearly see divergence from 1:1 line 
-plt.figure()
-plt.title('test 2. zero lag => DMshape Zernike coefficients = then_opd Zernike coefficients\n up to n_modes (slight differences could be due to spider)')
-plt.plot( my_dict['now_coe'], my_dict['DM_coe'] ,'.',label='test 2.',color='b')
-plt.plot( my_dict['now_coe'], my_dict['now_coe'] ,'-',label='1:1',color='r',alpha=0.3)
-plt.xlabel('now_coe [m]')
-plt.ylabel('DM_coe [m]')
-plt.legend()
-
-
-#3. zero lag => variance of corrected_opd should follow (roughly) Noll indicies (for circular poupil! ) <a_i**2> = c_ij * (D/r0)**(5/3), 
-# with correction var assymptotically approaching = (D/r0)**(5/3) * 0.2944*J**(np.sqrt(3)/2)
-
-#noll coefficients for first 3 radial orders 
-c_ij = np.array( [0.449,0.449,0.0232,0.0232,0.0232, 0.00619, 0.00619, 0.00619,0.00619] )
-
-basis = zernike.zernike_basis(5, npix=D_pix)
-pup = basis[0]  #AT_pupil(dim = D_pix, diameter = D_pix) 
-wvl_tmp = 1.6e-6
-theory_var = []
-meas_var = []
-for n_modes_tmp in range(10, 15): 
-    
-    # note each iteration of this continues to move phase screen and does not state
-    my_dict = AO_correction( pup, phase_screen, wvl_0=wvl_tmp, wvl=wvl_tmp, n_modes=n_modes_tmp, lag=0, V_turb=50, return_in_radians=False, troubleshoot=True)
-    
-    #c_ij_meas.append( (2*np.pi / wvl_tmp)**2 * np.nanvar( my_dict['corrected_opd'][pup>0.5] ) )#  / (D/r0)**(5/3) )  
-    theory_var.append( (D/r0)**(5/3) * 0.2944 * n_modes_tmp**(-np.sqrt(3)/2) )
-    meas_var.append( 0.3 * np.nanvar( (2*np.pi / wvl_tmp) * my_dict['corrected_opd'][pup>0.5] ) )
-    
-plt.figure()
-plt.plot( theory_var , '.')
-plt.plot( meas_var )
-
-
-
-#4. Issue with units - do we get expected strehl / 
-
-pup = basis[0]  #AT_pupil(dim = D_pix, diameter = D_pix) 
-wvl_tmp = 1.6e-6
-n_modes_tmp = 3
-my_dict = AO_correction( pup, phase_screen, wvl_0=wvl_tmp, wvl=wvl_tmp, n_modes=n_modes_tmp, lag=0, V_turb=50, return_in_radians=False, troubleshoot=True)
-
-print( 'Test X.\nstd (when adjusting for wvl) of raw phase screen =\n {}\nstd after correcting tip/tilt =\n {}'.format(np.nanvar( (2*np.pi / wvl_tmp) * my_dict['corrected_opd'] ) , np.nanvar(pup * crop2center( calibrate_phase_screen2wvl(wvl_tmp, phase_screen) , pup ) ) ) )
-
-#5 . correcting 14 modes with some reasonable lag can we reproduce NAOMI stats 
-
-pup = AT_pupil(dim = D_pix, diameter = D_pix) 
-
-n_modes_tmp = 14
-my_dict = AO_correction( pup, phase_screen, wvl_0=0.6e-6, wvl=1.65e-6, n_modes=n_modes_tmp, lag=2.5e-3, V_turb=50, return_in_radians=False, troubleshoot=True)
-
-print('strehl = {}'.format(np.exp(-np.nanvar( (2*np.pi / wvl_tmp) * my_dict['corrected_opd'] ))))
-
-
-
-#%%%% OLD FUNCTIONS 
-
-
-def AO_simulation_old(parameter_dict, sim_time = 0.01, wvl_list= [1.65e-6], save = False, saveAs = None):
-    
+def optimize_mask_depths( parameter_dict, wvls,  plot_results=True):
     """
-    simulate AO systemfor sim_time
+    Parameters
+    ----------
+    
+    parameter_dict - dictionary 
+    MUST HOLD THE FOLLOWING KEYS: 
+        target_phase_shift : float
+            desired phase shift (degrees)
+        glass_on : string
+            name of glass in on-axis (phase shift region) part of mask (see nglass function for options)
+        glass_off : string
+            name of glass in on-axis (phase shift region) part of mask 
+    
+    wvls : array like
+        array of wavelengths(m) to optimize (i.e. keep phaseshift as close to target_phase_shift as possible)
+        
+    for now we just do this the stupid but robust way of a manual grid search over reasonable depth (1um for on axis depth (d_on), wvl_c/10 for d_off) increments 
+    
+    output
+    parameter_dict : dictionary with updated results (optimized depths for target phase shift over wvls )
+    """
+    
+    try:
+        if np.isfinite( parameter_dict['target_phase_shift']):
+            target_phase_shift_rad = np.pi/180 * parameter_dict['target_phase_shift']
+        else:
+            raise TypeError('\n\n---->target_phase_shift is not finite!!!')
+            
+    except:
+        raise TypeError('target_phase_shift key probably does not exist in parameter_dict, check this! ')
+        
+    glass_on = parameter_dict['glass_on']
+    glass_off = parameter_dict['glass_off']
+    
+    
+    g1 = np.linspace(20e-6, 30e-6, 10) 
+    g2 = np.arange( 0, 5e-6,  (wvls[-1] + wvls[0]) / 2 / 10 )
+    
+    #init grid and best rmse 
+    rmse_grid = np.inf * np.ones([len(g1),len(g2)])
+    best_rmse = np.inf
+
+    for i,don in enumerate( g1 ):
+        for j, doff in enumerate( don - g2 ):
+            phase_shifts = []
+            for wvl in wvls:
+                n_on = nglass(1e6 * wvl, glass=glass_on)[0]
+                n_off = nglass(1e6 * wvl, glass=glass_off)[0]
+                n_air = nglass(1e6 * wvl, glass='air')[0]
+                
+                #opd_desired = target_phase_shift_rad / (2 * np.pi / wvl)
+                
+                opd = don * n_on  - ( n_air * (don-doff) + n_off * doff ) 
+                
+                phase_shifts.append( 2*np.pi / wvl * opd ) #radians
+
+            rmse = np.sqrt( np.mean( (target_phase_shift_rad - np.array(phase_shifts))**2 ) )
+            
+            rmse_grid[i,j] = rmse
+            
+            if rmse < best_rmse: #then store parameters 
+                
+                best_rmse = rmse  #radian
+                
+                mean_shift = np.mean(  np.array(phase_shifts) ) #radian
+                std_shift = np.std(  np.array(phase_shifts) ) #radian
+                
+                don_opt = don
+                doff_opt = doff
+                
+    
+    #if phase_mask_dict is None:
+    #    results = {'d_on':don_opt , 'd_off':doff_opt,'target_phase_shift': 180/np.pi * target_phase_shift, 'mean_phase_shift':mean_shift, 'std_phase_shift':std_shift, 'rmse':best_rmse, 'rmse_grid':rmse_grid}
+    
+    if type(parameter_dict) == type(dict()): # in this case return phase_mask_dict with updated items (but no rmse_grid!!)
+        
+        parameter_dict['d_on'] = don_opt
+        parameter_dict['d_off'] = doff_opt
+        parameter_dict['mean_phase_shift'] = 180/np.pi *  mean_shift #degree
+        parameter_dict['std_phase_shift'] = 180/np.pi *  std_shift   #degree
+        parameter_dict['rmse'] = 180/np.pi *  best_rmse   #degree
+        parameter_dict['rmse_grid'] = 180/np.pi * rmse_grid   #degree
+        
+        
+        #results = phase_mask_dict.copy() # {'phase_mask_dict':phase_mask_dict, 'don_opt':don_opt , 'doff_opt':doff_opt, 'rmse':best_rmse, 'rmse_grid':rmse_grid}
+        
+    else:
+        raise TypeError('input parameter_dict is not a dictionary')
+        
+    
+    if plot_results:
+        
+        #phase_mask_dict_tmp = {'d_off':results['d_off'], 'd_on':results['d_on'], 'glass_on':glass_on, 'glass_off':glass_off}
+
+        plot_phase_shift_dispersion( parameter_dict, wvls )
+    
+    
+    return( parameter_dict ) 
+
+
+
+
+
+def process_input_spectral_features( parameter_dict  ):
+    """
 
     Parameters
     ----------
-    parameter_dict : dictionary 
-        has to have format like this: (you can replace values as you widsh)
-        #-----
-        parameter_dict = {'seeing':1 , 'L0':25, 'D':1.8, 'D_pix':2**8, \
-                        'wvl_0':0.6e-6, 'wvl':1.65e-6,'n_modes':14,\
-                            'lag':3e-6,'V_turb':50}
-        #-----
-    sim_time  : float
-        how long to simulate for (s)
     
-    save : boolean 
-        do you want to save the output fits files?
+    parameter_dict - dictionary 
+    MUST HOLD THE FOLLOWING KEYS: 
+        baldr_min_wvl: float
+            minimum wavelength (m) for baldr wfs 
+        baldr_max_wvl : float
+            minimum wavelength (m) for baldr wfs 
+        input_spectrum_wvls : array like with floats
+            array of the input spectrum wavelengths (m) 
+        input_spectrum_ph/m2/wvl/s : array like with floats 
+            array holding the number of photons per  at the input wvlm^2 per second per wavelength bin 
+    
         
-    where2save : string or None
-        if save == True give the path+file_name of where we should save
-        e.g. '/Users/bcourtne/Documents/my_AO_sim.fits
-        
+    for now we just do this the stupid but robust way of a manual grid search over reasonable depth (1um for on axis depth (d_on), wvl_c/10 for d_off) increments 
+    
     Returns
-    -------
-    fits file with data cube of AO correctied phase screens (in radians) calculated at given wvl
+    --------
+    parameter_dict : dictionary with updated features of input spectrum inlcuding total_flux_in_wfs[ph/s/m2], redness_ratio, spectral_classification_in_wfs 
+
     """
     
     
-    #convert key strings to variable names
-    #for variable, value in naomi_parameter_dict.items():
-    #    exec("{} = {}".format( variable, value ) )
     
-    #convert dictionary keys to variable names (explicitly)
-    seeing = parameter_dict['seeing']
-    L0 = parameter_dict['L0']
-    D = parameter_dict['D']
-    D_pix = parameter_dict['D_pix']
-    wvl_0 = parameter_dict['wvl_0']
-    #wvl = parameter_dict['wvl']
-    n_modes = parameter_dict['n_modes']
-    lag = parameter_dict['lag']
-    V_turb = parameter_dict['V_turb']
-    pupil_geometry = parameter_dict['pupil_geometry']
-    desired_dt = parameter_dict['dt'] # desired simulation sampling rate (should be exact if dt is multiple of lag)
+    wvl_c = ( parameter_dict['baldr_min_wvl'] + parameter_dict['baldr_max_wvl'] ) / 2  
+    # filter to filter spectrum for the wfs wavelengths 
+    wfs_wvl_filter = (parameter_dict['input_spectrum_wvls'] >=  parameter_dict['baldr_min_wvl']) & (parameter_dict['input_spectrum_wvls'] <=  parameter_dict['baldr_max_wvl'])
+    #  filter to filter spectrum for the wfs wavelengths longer then the central (wvl_0) wavelength
+    wvl_red_filter = (parameter_dict['input_spectrum_wvls'] > wvl_c)
+    #  filter to filter spectrum for the wfs wavelengths shorter then the central (wvl_0) wavelength
+    wvl_blue_filter = (parameter_dict['input_spectrum_wvls'] < wvl_c)
     
     
-    #parameters derived from input variables
-    dx = D/D_pix  # diff element (pixel size) pupil plane (m)
-    r0 = 0.98 * 500e-9 / np.radians(seeing/3600) #Fried parameter defined at 500nm
+    total_flux_in_wfs = np.trapz(parameter_dict['input_spectrum_ph/m2/wvl/s'][wfs_wvl_filter], parameter_dict['input_spectrum_wvls'][wfs_wvl_filter] )  #photons/s/m^2
     
-    #how far will it travel in sim_time 
-    distance = V_turb * sim_time
-    distance_pix = int(distance / dx) # convert to pixels
+    # number of photons above central wvl of wfs bandpass 
+    num = np.trapz( parameter_dict['input_spectrum_ph/m2/wvl/s'][wfs_wvl_filter & wvl_red_filter],parameter_dict['input_spectrum_wvls'][wfs_wvl_filter & wvl_red_filter] )
+    # number of photons below central wvl of wfs bandpass 
+    den = np.trapz( parameter_dict['input_spectrum_ph/m2/wvl/s'][wfs_wvl_filter & wvl_blue_filter],parameter_dict['input_spectrum_wvls'][wfs_wvl_filter & wvl_blue_filter] )
     
-    V_pix = V_turb / dx # how many pixels to jump per second 
-    jumps = int( lag * V_pix ) #how many pixels are jumped per AO iteration 
-    
-    if jumps>0:
-        no_iterations = distance_pix // jumps # how many 
+
+    if den > 0: 
+        redness_ratio = num/den
+    elif den == 0:
+        print( '\n\n ->input spectrum has zero photons below the wavelength bandpass center...\n  setting redness ratio to 999999')
+        redness_ratio = 999999
+    elif den < 0:
+        raise TypeError('\n\n ===== \n number of photons below central wvl of wfs bandpass  evaluated to a negative number.\nThis cannot be physically true!  ')
     else:
-        no_iterations = distance_pix
+        raise TypeError('\n\n ===== \n den != 0 or den == 0 or den < 0:cannot be evaluated, check input to process_input_spectral_features() function ')
         
+    # should i output this into input spectrum dict or baldr dict? 
+    #maybe I should eventually combine them all into master parameter dictionary !!! 
+    parameter_dict['redness_ratio'] =  round(redness_ratio,4)
+    parameter_dict['total_flux_in_wfs[ph/s/m2]'] = total_flux_in_wfs
     
-    phase_screen = aotools.turbulence.infinitephasescreen.PhaseScreenVonKarman(D_pix, pixel_scale=dx,\
-          r0=r0 , L0=L0, n_columns=2,random_seed = 1) # radians
-    
-    # get the telescope pupil
-    pup = pick_pupil(pupil_geometry, dim=D_pix, diameter=D_pix )
-       
-    # ======
-    # apply AO correction and produce phase screen for each AO iteration (lag)
-    naomi_screens = []
-    for i in range(no_iterations):
-        
-
-        
-        phase_screen.add_row()
-        naomi_screens.append( AO_correction( pup, phase_screen, wvl_0, wvl, n_modes, lag, V_turb, return_in_radians=True, troubleshoot=False ) )
-        
-
-    # ======
-    # To get near the desired sampling we linearly interpolate between pixels on our phase screens  
-    screens_between = int( round( lag / desired_dt ) ) # how many frames between lagged steps?
-    dt = lag / screens_between 
-
-    naomi_screens_interp = []
-    if screens_between > 1:
-        # warning if interpolating will be much longer then tau0
-        if lag > 10 * r0 / V_turb :
-            print('\n\n=== WARNING:\n AO lag much greeater then tau0, linear interpolation for smaller sampling times may not be valid')
-        
-        for i in range( len(naomi_screens) - 1 ):
-        
-            naomi_screens_interp = naomi_screens_interp + list( np.linspace( naomi_screens[i], naomi_screens[i+1], screens_between)[:-1] )
-        
+    # do some basic classification on spectral type seen by wfs
+    if round(redness_ratio,4)==1:
+        spectral_classification = 'flat'
+    elif round(redness_ratio,4)>1:
+        spectral_classification = 'red'
+    elif round(redness_ratio,4)<1:
+        spectral_classification = 'blue'
     else:
-        naomi_screens_interp = naomi_screens
+        raise TypeError('\n\n===\n something went wrong when evaluating redness_ratio, non cases met. check process_input_spectral_features() function' )
     
-    hdu = fits.PrimaryHDU( naomi_screens_interp )
+    parameter_dict['spectral_classification_in_wfs'] = spectral_classification
     
-    hdu.header.set('what is', 'AO corrected phase screens (rad)' , 'at lambda = {}um'.format(round(wvl*1e6,3)))
-    hdu.header.set('simulation time', sim_time, 'simulation time (s)')
-    hdu.header.set('seeing', seeing, 'arcsec')
-    hdu.header.set('L0', L0, 'outerscale (m)')
-    hdu.header.set('D', D, 'telescope diameter (m)')
-    hdu.header.set('D_pix', D_pix, '#pixels across telescope diameter')
-    hdu.header.set('wvl_0', wvl_0, 'central wavelentgth of WFS (m)')
-    hdu.header.set('wvl', wvl, 'wavelentgth where corrected phase screen is calculated (m) ')
-    hdu.header.set('n_modes', n_modes, '#N modes sensed & corrected by AO system')
-    hdu.header.set('lag', lag, 'latency of AO system (s)')
-    hdu.header.set('V_turb', V_turb, 'velocity of phase screen (m/s)')
-    hdu.header.set('pupil_geometry', pupil_geometry, 'Valid options are AT, UT, disk')
-    hdu.header.set('dt', dt, 'phase screen sampling rate')
+    return( parameter_dict )
+
+
+
+
+
+#%%% Old can Delete stuff 
+
+
+def baldr_simulation_bk_deleteme_l8er( naomi_screens , input_spectrum, baldr_dict, phase_mask_dict, wvl_0 = 1.65e-6, save = False, saveAs = None):
+    """
+    Parameters
+    ----------
+    naomi_screens : fits file
+        DESCRIPTION. fits file with timeseries of NAOMI corrected phase screens at various wavelengths
+        (hint: naomi_screens should be the output of naomi_simulation() function )
+        
+        
+    master_parameter_dict :   dictionary
+    
+        baldr_dict['wvl_range_wfs'] - list or tuple with [min wvl, max wvl] of wfs 
+        baldr_dict['wvl_0'] - primary wavelength (m) of baldr WFS where correction is optimized. The default is 1.65e-6 m. (this should be within wvl_range_wfs)
+        baldr_dict['f_ratio'] - float indicating the  f ratio of Zernike wfs 
+        baldr_dict['DIT'] - float indicating the detector integration time of wfs  
+        baldr_dict['processing_latency'] - float indicating the latency of baldr wfs 
+        baldr_dict['RON'] - read out noise of baldr wfs detector
+        
+        
+        phase_mask_dict['T_off'] = phase mask off-axis transmission (outside phase shift region)
+        phase_mask_dict['T_on'] = phase mask on-axis transmission (in phase shift region)
+        phase_mask_dict['d_off'] = phase mask off-axis depth (m) 
+        phase_mask_dict['d_on'] = phase mask on-axis depth (m) 
+        phase_mask_dict['glass_off'] = material of off-axis region 
+        phase_mask_dict['glass_on'] = material of on-axis region 
+        phase_mask_dict['phase_mask_rad'] = radias of phase shift region at wfs central wvl (units = lambda/D) 
+        phase_mask_dict['achromatic_diffraction'] = (boolean) if all wavelengths diffract to the same lambda_0/D  (this is stufy the effect of wvl dependent spatial distribution of phase shift)
+        [NOTE I SHOULD CHANGE phase_mask_rad TO PHYSICAL UNITS ]
+            
+    input_spectrum : dictionary
+        DESCRIPTION. input light spectrum (ph/m2/wvl/s) 
+            input_spectrum['wvl'] - array like with wavelengths (m)
+            input_spectrum['ph/m2/wvl/s'] - array like with flux per wavelength bin 
+        
+    baldr_dict: dictionary
+        DESCRIPTION.  baldr_dict
+            baldr_dict['wvl_range_wfs'] - list or tuple with [min wvl, max wvl] of wfs 
+            baldr_dict['f_ratio'] - float indicating the  f ratio of Zernike wfs 
+            baldr_dict['DIT'] - float indicating the detector integration time of wfs  
+            baldr_dict['processing_latency'] - float indicating the latency of baldr wfs 
+            baldr_dict['RON'] - read out noise of baldr wfs detector
+            
+        
+    phase_mask_dict : dictionary 
+        DESCRIPTION. phase mask parameters :
+            phase_mask_dict['T_off'] = phase mask off-axis transmission (outside phase shift region)
+            phase_mask_dict['T_on'] = phase mask on-axis transmission (in phase shift region)
+            phase_mask_dict['d_off'] = phase mask off-axis depth (m) 
+            phase_mask_dict['d_on'] = phase mask on-axis depth (m) 
+            phase_mask_dict['glass_off'] = material of off-axis region 
+            phase_mask_dict['glass_on'] = material of on-axis region 
+            phase_mask_dict['phase_mask_rad'] = radias of phase shift region at wfs central wvl (units = lambda/D) 
+            phase_mask_dict['achromatic_diffraction'] = (boolean) if all wavelengths diffract to the same lambda_0/D  (this is stufy the effect of wvl dependent spatial distribution of phase shift)
+            [NOTE I SHOULD CHANGE phase_mask_rad TO PHYSICAL UNITS ]
+            
+            
+    wvl_0 : TYPE, float
+        DESCRIPTION. Central wavelength (m) of baldr WFS. The default is 1.65e-6 m.
+
+    Returns
+    -------
+    fits file with timeseries of Baldr corrected phase screens at input phase screen wavelengths (defined in naomi_screens) fits file
+
+    """
+
+    input_screens = copy.deepcopy(naomi_screens) # to get parameters from 
+    
+    baldr_screens = copy.deepcopy(naomi_screens) # another copy to avoid editing original while assigning 
     
     
+    input_wvls = np.array( [it.header['wvl'] for it in input_screens] )
     
-    test = fits.PrimaryHDU()
-    test.header['simulation time'] = 0.1
+    wvl_indx_4_wfs = [i for i,w in enumerate(input_wvls) if (w >= baldr_dict['wvl_range_wfs'][0]) & (w <= baldr_dict['wvl_range_wfs'][1]) ]
+    
+    wvl_0_indx = np.argmin(abs(wvl_0 - input_wvls))
+    
+    #abbreviated phase mask parameters 
+    A = phase_mask_dict['T_off']
+    B = phase_mask_dict['T_on']
     
     
-    test_list = fits.HDUList([test, naomi_screens,naomi_screens]) 
+    for frame in range(input_screens[0].shape[0]):
+        #init output intensity to zero
+        Ic = np.zeros((baldr_screens[0].header['D_pix'],baldr_screens[0].header['D_pix']))
+        N_ph_T = 0
+        
+        for wvl_indx in wvl_indx_4_wfs:  #  need to filter for valid wvls where baldr sensor operates! 
+            
+            wvl_in = baldr_screens[wvl_indx].header['wvl']
+            
+            
+            
+            # input phase screen from *NAOMI* at current wvl
+            phi = input_screens[wvl_indx].data[frame]
+            phi[~np.isfinite(phi)] = 0 # mft can't deal with nan values  - so convert to zero
+            #phi = putinside_array(np.zeros([nx_size, nx_size]), phi.copy()) #put inside new grid 
+        
+            
+            #-------- these should not depend on wvl --------------------
+            D = input_screens[wvl_indx].header['D']
+            dx = D / input_screens[wvl_indx].header['D_pix'] #m/pixels
+            f_ratio = baldr_dict['f_ratio']
+                
+            pup = pick_pupil(input_screens[wvl_indx].header['pupil_geometry'], dim=input_screens[wvl_indx].header['D_pix'], diameter=input_screens[wvl_indx].header['D_pix'] )
+            #------------------------------------------------------------
+            
+            # create function to interpolate flux to current wavelength 
+            flux_interp_fn = interp1d( input_spectrum['wvl'], input_spectrum['ph/m2/wvl/s']  )
+            
+            # interpolate to wvl from input photon flux and multiply by WFS DIT, differential (input) wvl element & telescope area to estimate N_ph in wvl bin
+            N_ph_wvl = flux_interp_fn( wvl_in ) * np.diff( input_wvls )[wvl_indx-1] * baldr_dict['DIT'] * ((D/2)**2 * np.pi)
+            N_ph_T += N_ph_wvl # add this to total number of photons
+            """
+            physical radius (m) is conserved for phase mask (unless we have some chromatic lens.. we could keep radius constant lambda/D )
+            f_ratio * D * wvl_0 / D 
+            therefore scale phase_mask_dict['phase_mask_rad_at_wvl_0'] by wvl_0/wvl_in
+            
+            """
+            
+            if phase_mask_dict['achromatic_diffraction']:
+                # this case is not physically realistic but can be used to study the impact of chromatic spatial distribution of phase shift 
+                # can look at it as physical size of phase mask radius changes with wavelength to always be lambda/D
+                phase_mask_rad = phase_mask_dict['phase_mask_rad_at_wvl_0'] 
+                 
+            elif not phase_mask_dict['achromatic_diffraction']:
+                """
+                # this should be default for realistic simulations 
+                # sanity check : 
+                    phase mask rad = n lambda/D at wvl_0 
+                    => physical radius fixed: r = C * n * wvl_0 / D => at wvl : r(wvl_0) = r(wvl) = C * n * (wvl / D) * wvl_0/wvl   
+                
+                """
+                phase_mask_rad =  wvl_0/input_screens[wvl_indx].header['wvl'] * phase_mask_dict['phase_mask_rad_at_wvl_0']  #TO DO:  make this function of wvl such that = constant in physical radius and phase_mask_dict['phase_mask_rad_at_wvl_0'] (lambda/D) at wvl_0
+                
+            else:
+                raise TypeError('phase_mask_dict["achromatic_diffraction"] is not boolean')
+            
+            #What is phase shift of phase mask at wvl = wvl_in 
+            theta = phase_mask_phase_shift( wvl_in , d_on = phase_mask_dict['d_on'], d_off=phase_mask_dict['d_off'], glass_on = phase_mask_dict['glass_on'], glass_off = phase_mask_dict['glass_off'])
+        
+            IC_dict = I_C_analytic(A, B, theta, phase_mask_rad, phi, pup, N_ph_wvl, dx, wvl_in, D, f_ratio, troubleshooting=True) # need to changephase_mask_rad to physical radius of scale properly with wvl  if we want chromatic (not lambda /D)
+            
+            # get b at the central wavlength
+            if wvl_0_indx in wvl_indx_4_wfs:
+                
+                if wvl_indx == wvl_0_indx:
+                    
+                    b_est =  IC_dict['b'] 
+                
+            else:
+                raise TypeError('central wavelength (wvl_0) not in defined wfs wavelength range (wvl_range_wfs)')
+                
+                
+            # add intensity contribution from spectral bin 
+            Ic += IC_dict['Ic'] # + noise 
+            
+            # Now add shot noise :
+                
+            # note  that input field calculated in I_C_analytic is normalized so that sum over every pupil pixel intensity = N_phot_wvl , 
+            N_pix = np.nansum( pup ) #number of pixels in pupil 
+            # average number of photons per pixel = N_ph_wvl/N_pix  (uniform illumination assumption)
+            # therefore generate the a possion distribution (shot noise) with zero mean but var =  N_ph_wvl/N_pix  to add to output intesnity 
+            # note that this shot noise assume perfect trasmission from input pupil to output detector.. 
+            shot_noise = N_ph_wvl/N_pix - poisson.rvs( N_ph_wvl/N_pix, size= Ic.shape)  
+            Ic += shot_noise
+            # make sure there are no negative values 
+            Ic[Ic<0] = 0 
+            
+            #resample to resize pixels 
+            # --- TO DO - need to know how many pixels we reading out on 
+            
+            # after rebinning (if done) then we convert intensity to adu (integers)
+            Ic_adu = Ic.astype(int)
+            
+        # now that we have our intensity across all wfs spectral channels we can estimate the phase at wvl_0(or wherever we estimated b and theta) - we could also consider estimating b for each spectral chanel and then averaging etc 
+        phi_est = zelda_phase_estimator_1(Ic_adu, pup, N_ph_T, dx, A, B,  abs( b_est ), theta, exp_order=1) #radians 
+        
+        # convert phase estimate to DM OPD at wvl_0
+        DM_cmd = wvl_0 / (2*np.pi) * phi_est
+        
+        
+        #------ now to subtract DM from input phase screen at each wavelength 
+        
+        
+        lag = baldr_dict['DIT'] + baldr_dict['processing_latency'] #s
+        
+        dt = input_screens[wvl_indx].header['dt']
+        
+        jumps = int(round(lag / dt)) # number of frames to jump before applying correction 
+        
+        for hdu in baldr_screens:
+            
+            hdu.header.set('what is', 'Naomi+Baldr AO corrected phase screens (rad)' )
+            hdu.header.set('wvl_0', wvl_0, 'central wavelentgth of Baldr WFS (m) ')
+            
+                               
+            for  k,v in phase_mask_dict.items() : 
+                hdu.header.set(k , v, ' baldr phase_mask parameters ')
+                
+            
+            hdu.header.set('baldr wfs wvl_min' , baldr_dict['wvl_range_wfs'][0] , ' minimum wavelength (m) in baldr wfs')
+            hdu.header.set('baldr wfs wvl max' , baldr_dict['wvl_range_wfs'][1] , ' maximum wavelength (m) in baldr wfs')
+            hdu.header.set('baldr wfs badwidth ' , round( 100 * (baldr_dict['wvl_range_wfs'][1] -  baldr_dict['wvl_range_wfs'][0]) / wvl_0, 2) , ' maximum wavelength (m) in baldr wfs')
+            hdu.header.set('f_ratio' , baldr_dict['f_ratio'] , ' f ratio of ZWFS')
+            hdu.header.set('baldr DIT' , baldr_dict['DIT'] , 'baldr wfs detector integration time (s)')
+            hdu.header.set('baldr latency' , baldr_dict['DIT'] , 'baldr latency after detector integration (s) ')
+            hdu.header.set('baldr RON' , baldr_dict['RON'] , 'baldr detector read out noise [e-]')
+
+        
+            if frame + jumps < input_screens[0].shape[0]:
+                
+                wavefront_opd = hdu.header['wvl'] / (2*np.pi) * hdu.data[frame + jumps]
+                hdu.data[ frame + jumps ] =  2*np.pi /hdu.header['wvl'] * ( wavefront_opd  -  DM_cmd )
+                
+            else:
+                print('to do here')
+                #hdu.data[ frame +   ] = hdu.header['wvl'] / (2*np.pi) * hdu.data[frame] - DM_cmd 
+    
     if save:
-        hdu.writeto(saveAs,overwrite=True)
+        baldr_screens.writeto(saveAs,overwrite=True)
+
+    return(baldr_screens)
+
+
+
+
+
+
+def optimize_mask_depths_bk_deletemelater(desired_phase_shift , glass_on, glass_off, wvls, phase_mask_dict = None, plot_results=True):
+    """
+    Parameters
+    ----------
+    
+    desired_phase_shift : float
+        desired phase shift (radians)
+    glass_on : string
+        name of glass in on-axis (phase shift region) part of mask (see nglass function for options)
+    glass_off : string
+        name of glass in on-axis (phase shift region) part of mask 
+    phase_mask_dict : None or dictionary 
+        phase_mask_dict , if provided (not None) then a phase_mask_dict will be returned in results dictionary with the optimized don, doff phase mask depths 
+    wvls : array like
+        array of wavelengths(m) to optimize (i.e. keep phaseshift as close to desired_phase_shift as possible)
         
-    return( hdu )
+    for now we just do this the stupid but robust way of a manual grid search over reasonable depth (1um for on axis depth (d_on), wvl_c/10 for d_off) increments 
+    
+    output
+    results : dictionary with results 
+    """
+    g1 = np.linspace(20e-6, 30e-6, 10) 
+    g2 = np.arange( 0, 5e-6,  (wvls[-1] + wvls[0]) / 2 / 10 )
+    
+    #init grid and best rmse 
+    rmse_grid = np.inf * np.ones([len(g1),len(g2)])
+    best_rmse = np.inf
+
+    for i,don in enumerate( g1 ):
+        for j, doff in enumerate( don - g2 ):
+            phase_shifts = []
+            for wvl in wvls:
+                n_on = nglass(1e6 * wvl, glass=glass_on)[0]
+                n_off = nglass(1e6 * wvl, glass=glass_off)[0]
+                n_air = nglass(1e6 * wvl, glass='air')[0]
+                
+                opd_desired = desired_phase_shift / (2 * np.pi / wvl)
+                
+                opd = don * n_on  - ( n_air * (don-doff) + n_off * doff ) 
+                
+                phase_shifts.append( 2*np.pi / wvl * opd )
+
+            rmse = np.sqrt( np.mean( (desired_phase_shift - np.array(phase_shifts))**2 ) )
+            
+            rmse_grid[i,j] = rmse
+            
+            if rmse < best_rmse: #then store parameters 
+                
+                best_rmse = 180/np.pi * rmse  #degree
+                
+                mean_shift = 180/np.pi * np.mean(  np.array(phase_shifts) ) #degree
+                std_shift = 180/np.pi * np.std(  np.array(phase_shifts) ) #degree
+                
+                don_opt = don
+                doff_opt = doff
+    
+    if phase_mask_dict is None:
+        results = {'d_on':don_opt , 'd_off':doff_opt,'target_phase_shift': 180/np.pi * desired_phase_shift, 'mean_phase_shift':mean_shift, 'std_phase_shift':std_shift, 'rmse':best_rmse, 'rmse_grid':rmse_grid}
+    
+    elif type(phase_mask_dict) == type(dict()): # in this case return phase_mask_dict with updated items (but no rmse_grid!!)
+        
+        phase_mask_dict['d_on'] = don_opt
+        phase_mask_dict['d_off'] = doff_opt
+        phase_mask_dict['target_phase_shift'] = 180/np.pi * desired_phase_shift #desired phase shift input is in radians 
+        phase_mask_dict['mean_phase_shift'] = mean_shift
+        phase_mask_dict['std_phase_shift'] = std_shift
+        phase_mask_dict['rmse'] = best_rmse
+        
+        
+        results = phase_mask_dict.copy() # {'phase_mask_dict':phase_mask_dict, 'don_opt':don_opt , 'doff_opt':doff_opt, 'rmse':best_rmse, 'rmse_grid':rmse_grid}
+        
+    else:
+        raise TypeError('input phase_mask_dict is not a dictionary')
+        
+    
+    if plot_results:
+        
+        phase_mask_dict_tmp = {'d_off':results['d_off'], 'd_on':results['d_on'], 'glass_on':glass_on, 'glass_off':glass_off}
+
+        plot_phase_shift_dispersion( phase_mask_dict_tmp , wvls )
+    
+    
+    return( results ) 
+
+
+
