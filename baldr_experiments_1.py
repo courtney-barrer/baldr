@@ -31,7 +31,7 @@ import json
 
 os.chdir('/home2/bcourtne/baldr')
 
-from functions import baldr_functions as baldr
+import baldr_functions as baldr
 
 
 """
