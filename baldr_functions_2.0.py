@@ -10,7 +10,8 @@ baldr functions 2.0
 
 To Do
 ======
-double check mft is being used properly in getting output field !
+there is some factor 10 error in  b or P when A=B=1 for phase estimate
+
 
 - tip/tilt vis 
 for i in np.linspace(0,2*np.pi,10):
@@ -462,12 +463,15 @@ class zernike_phase_mask:
 
 class detector:
     
-    def __init__(self, npix, pix_scale, QE={w:1 for w in np.linspace(0.9e-6,2e-6,100)}):
+    def __init__(self, npix, pix_scale, DIT = 1, ron=1, QE={w:1 for w in np.linspace(0.9e-6,2e-6,100)}):
         
         self.npix = npix
         self.pix_scale = pix_scale
         self.det = np.zeros([ self.npix ,  self.npix ] )
         self.qe = QE
+        self.DIT = DIT 
+        self.ron = ron #e-
+        
         
     def interpolate_QE_to_field_wvls(self, field):
         
@@ -476,15 +480,13 @@ class detector:
         self.qe = fn(field.wvl)
 
         
-    def detect_field(self, field, DIT=1,  include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True):
+    def detect_field(self, field, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True):
         # have to deal with cases that field grid is different to detector grid
         # have to deal with field wavelengths (look at field class structure), detector wavelengths defined in self.qe dict
         # IMPORTANT TO HAVE FAST OPTION WHEN GRIDS ARE SET PROPERLY FROM THE START TO AVOID 2D INTERPOLATION!!
         
         
-        # field and detector x coordinates 
-        x_field = np.linspace(-field.nx_size * field.dx / 2, field.nx_size * field.dx / 2, field.nx_size)
-        x_det =  np.linspace(-self.npix * self.pix_scale / 2, self.npix * self.pix_scale / 2, self.npix)
+        self.det = np.zeros([ self.npix ,  self.npix ] )
         
         #wavelengths
         det_wvl = list( self.qe.keys() ) # m
@@ -499,6 +501,7 @@ class detector:
             print('WARNING: some of the input field does not fall on the detector')
         
         if grids_aligned: 
+            
             pw = int(self.pix_scale // field.dx) # how many field grid points fit into a single detector pixel assuming same origin
         
             for n in range(self.det.shape[0]):
@@ -506,21 +509,36 @@ class detector:
                     if ph_per_s_per_m2_per_nm:
                         if include_shotnoise:
                         
-                            P_wvl = np.array( [DIT * self.qe[w] * np.sum( field.flux[w][pw*n:pw*(n+1), pw*m:pw*(m+1)] * field.dx**2 ) for w in field_wvls] )
+                            P_wvl = np.array( [self.DIT * self.qe[w] * np.sum( field.flux[w][pw*n:pw*(n+1), pw*m:pw*(m+1)] * field.dx**2 ) for w in field_wvls] )
                             self.det[n,m] =  poisson.rvs( integrate( P_wvl  , field_wvls * 1e9) ) # draw from poission distribution with mean = np.trapz( P_wvl  , field_wvls)
                             #note 1e9 because field_wvls should be m and flux should be ph_per_s_per_m2_per_nm
                         else:
                             # integrate to get number of photons 
-                            P_wvl = np.array( [DIT * self.qe[w] * np.sum( field.flux[w][pw*n:pw*(n+1), pw*m:pw*(m+1)] * field.dx**2 ) for w in field_wvls] )
+                            P_wvl = np.array( [self.DIT * self.qe[w] * np.sum( field.flux[w][pw*n:pw*(n+1), pw*m:pw*(m+1)] * field.dx**2 ) for w in field_wvls] )
                             self.det[n,m] =  integrate( P_wvl  , field_wvls * 1e9) # 
                             #DIT * self.qe[wvl] * np.sum( flux[pw*n:pw*(n+1), pw*m:pw*(m+1)] * field.dx**2 ) 
                     else:
                         raise TypeError('make sure flux units are ph_per_s_per_m2_per_nm othersie integrals will be wrong\n\
                                         look at star2photons function')
         
+            # add the read noise 
+            self.add_ron( self.ron ) 
+            
+            # convert detected signal to signal class
+            det_sig = signal( self.det )
+            
+            return( det_sig )
+        
+        
+        # ------ caution here, not well tested 
         else: # we try  interpolate to align grids 
             
             print('\n-------\nWARNING detect_field not well tested when grids_aligned=False.. be careful!!\n\n------')
+            
+            # field and detector x coordinates 
+            x_field = np.linspace(-field.nx_size * field.dx / 2, field.nx_size * field.dx / 2, field.nx_size)
+            x_det =  np.linspace(-self.npix * self.pix_scale / 2, self.npix * self.pix_scale / 2, self.npix)
+        
             pixel_window = self.pix_scale / field.dx # how many field grid points fit into a single detector pixel assuming same origin
        
             if pixel_window >= 1:
@@ -561,12 +579,31 @@ class detector:
                     for m in range(self.det.shape[0]):
                         # integrate 
                         #self.det[n,m] = DIT * self.qe[wvl] * new_flux[pw*n:pw*(n+1), pw*m:pw*(m+1)] * new_dx**2
-                        P_wvl = [DIT * self.qe[w] * np.sum( interp_flux[w][pw*n:pw*(n+1), pw*m:pw*(m+1)] * new_dx**2 ) for w in field_wvls]
-                        self.det[n,m] =  np.trapz( P_wvl  , field_wvls * 1e9) # = total #ph
-                
+                        
+                        if ph_per_s_per_m2_per_nm:
+                            if include_shotnoise:
+                            
+                                P_wvl = np.array( [self.DIT * self.qe[w] * np.sum( field.flux[w][pw*n:pw*(n+1), pw*m:pw*(m+1)] * field.dx**2 ) for w in field_wvls] )
+                                self.det[n,m] =  poisson.rvs( integrate( P_wvl  , field_wvls * 1e9) ) # draw from poission distribution with mean = np.trapz( P_wvl  , field_wvls)
+                                #note 1e9 because field_wvls should be m and flux should be ph_per_s_per_m2_per_nm
+                            else:
+                                # integrate to get number of photons 
+                                P_wvl = np.array( [self.DIT * self.qe[w] * np.sum( field.flux[w][pw*n:pw*(n+1), pw*m:pw*(m+1)] * field.dx**2 ) for w in field_wvls] )
+                                self.det[n,m] =  integrate( P_wvl  , field_wvls * 1e9) # 
+                                #DIT * self.qe[wvl] * np.sum( flux[pw*n:pw*(n+1), pw*m:pw*(m+1)] * field.dx**2 ) 
+                        else:
+                            raise TypeError('make sure flux units are ph_per_s_per_m2_per_nm othersie integrals will be wrong\n\
+                                            look at star2photons function')
                 #if include_shotnoise
                 #Add Shot noise ! 
                 
+                # add the read noise 
+                self.add_ron( self.ron ) 
+                
+                # convert detected signal to signal class
+                det_sig = signal( self.det )
+                
+                return( det_sig )
                 
             elif field.dx < self.pix_scale:
                 raise TypeError('field.dx > self.pix_scale \ntry increase detector\
@@ -582,11 +619,28 @@ class detector:
         self.det = (self.det + np.random.normal(loc=0, scale=sigma, size=self.det.shape) ).astype(int)
 
 
-    def ZWFS_phase_estimator_1(self, A, B, b, P, theta, exp_order=1):
+    
+    
+    
+# diffraction limit microscope (m) d = lambda/(2*NA) = lambda * F where F=D/focal length (https://www.telescope-optics.net/telescope_resolution.htm)
+#class detector:
+#    def __init__(self, N_pixels):
         
+        
+        
+ 
+#def naomi_correction(fields):    
+class signal():
+     def __init__(self, signal):
+         self.signal = signal
+         
+    
+     def ZWFS_phase_estimator_1(self, A, B, b, P, theta, exp_order=1):
+        # note b needs to be detected with the same detector DIT as signal!
+         
         aa = b * (A**2 * P - A * B * P * np.cos(theta) )
         bb = 2 * A * b * B * P * np.sin(theta)
-        cc =  -self.det + (A**2 * P**2 + b**2 * (A**2 + B**2 - 2 * A * B * np.cos(theta) ) +\
+        cc =  -self.signal + (A**2 * P**2 + b**2 * (A**2 + B**2 - 2 * A * B * np.cos(theta) ) +\
             2 * b * ( -A**2 * P  + A * B * P * np.cos(theta) ) ) 
             
         if exp_order == 1:
@@ -595,7 +649,7 @@ class detector:
         if exp_order == 2:
             phi = ( (-bb + np.sqrt(bb**2 - 4 * aa * cc) ) / (2 * aa) , ( -bb - np.sqrt(bb**2 - 4 * aa * cc) ) / (2 * aa) )
         
-        return( phi )  
+        return( phi )   
     
         """
         P = pup #  rename to make equations clearer 
@@ -619,16 +673,8 @@ class detector:
         
         return( phi )  
         """
-# diffraction limit microscope (m) d = lambda/(2*NA) = lambda * F where F=D/focal length (https://www.telescope-optics.net/telescope_resolution.htm)
-#class detector:
-#    def __init__(self, N_pixels):
         
         
-        
- 
-#def naomi_correction(fields):    
- 
-    
 
 def star2photons(band, mag, airmass=1, k = 0.18, ph_m2_s_nm = True):
     """
@@ -782,7 +828,20 @@ def aggregate_array(array_A, new_shape, how='mean'):
         raise TypeError('how method specified doesn"t exist.\ntry how="mean" or how="sum"')
    
     
-
+def plot_cross_section( array_2d, x = None, xlabel='x',ylabel='y' ):
+    
+    plt.figure(figsize=(8,5))
+    if x==None:
+        
+        plt.plot( array_2d[len(array_2d)//2,:] )
+    
+    else:
+        plt.plot(x, array_2d[len(array_2d)//2,:] )
+    
+    plt.xlabel(xlabel,fontsize=15)
+    plt.ylabel(ylabel,fontsize=15)
+    plt.gca().tick_params(labelsize=15)
+    
 def crop2center(a,b):
     """
     
@@ -935,10 +994,6 @@ def integrate(y,x):
 #%% testing 
 
 
-# INPUTFIELD 
-
-
-
 
 # input pupil field grid (WORKS BEST WHEN dim=D_pix )
 dim=2**9
@@ -950,9 +1005,9 @@ pup = pick_pupil('AT', dim=dim, diameter=D_pix ) #aperture.disc(dim=dim, size=D_
 basis = zernike.zernike_basis(nterms=10, npix=D_pix)
 
 # input field 
-wvls = np.linspace( 1.5e-6, 1.7e-6, 10)
+wvls = np.linspace( 1.5e-6, 1.7e-6, 5)
 
-ph_flux_H = star2photons('H', 8, airmass=1.3, k = 0.18, ph_m2_s_nm = True)
+ph_flux_H = star2photons('H', 11, airmass=1.3, k = 0.18, ph_m2_s_nm = True)
 fluxes = [pup * (ph_flux_H + noise) for noise in np.random.normal(0, 1e-5*ph_flux_H, len(wvls))]
 
 # NOTE THINGS GET VERY NON-LINEAR IN HIGHER ORDER MODES IF a > 1 ( i.e. 5e-1*basis[5])
@@ -972,6 +1027,8 @@ d_off=26e-6
 glass_on='sio2'
 glass_off='sio2'
 
+desired_phase_shift = 60 # deg
+
 # focal plane grid
 phase_shift_diameter = 1 * f_ratio * wvls[0]   ##  f_ratio * wvls[0] = lambda/D  given f_ratio
 
@@ -980,67 +1037,40 @@ N_samples_across_phase_shift_region = 10 # number of pixels across pghase shift 
 dx_focal_plane = phase_shift_diameter / N_samples_across_phase_shift_region  # 
 
 
-
-# generate field class for input field 
-input_field = field(fluxes , phases, wvls )
-# define the grid 
-input_field.define_pupil_grid( dx = 1.8 / D_pix, D_pix = D_pix )
-
-
 # init filter 
 FPM = zernike_phase_mask(A,B,phase_shift_diameter,f_ratio,d_on,d_off,glass_on,glass_off)
 
 # optimize depths 
-FPM.optimise_depths(desired_phase_shift=90, across_desired_wvls=wvls ,verbose=True)
+FPM.optimise_depths(desired_phase_shift=desired_phase_shift, across_desired_wvls=wvls ,verbose=True)
 
 
-start_time = time.time()
-# get output field 
+# generate field class for input field 
+input_field = field(fluxes , phases, wvls )
+
+# define the grid 
+input_field.define_pupil_grid( dx = 1.8 / D_pix, D_pix = D_pix )
+
+# get output field after phase mask
 output_field = FPM.get_output_field( input_field, wvl_lims=[0,100], \
                                     nx_size_focal_plane = nx_size_focal_plane , dx_focal_plane = dx_focal_plane, keep_intermediate_products=True )
 
 output_field.define_pupil_grid(dx=input_field.dx, D_pix=input_field.D_pix)
-print("once field, masks are intialized time for getting output field:--- %s seconds ---" % (time.time() - start_time))
+#print("once field, masks are intialized time for getting output field:--- %s seconds ---" % (time.time() - start_time))
 
-
-
-"""# init filter 
-FPM2 = zernike_phase_mask(A,B,phase_shift_diameter,f_ratio,d_on,d_off,glass_on,glass_off)
-# optimize depths 
-FPM2.optimise_depths(desired_phase_shift=0, across_desired_wvls=wvls ,verbose=True)
-# sample our focal plane mask (FPM). 
-FPM2.sample_phase_shift_region(nx_pix=2**9, dx = FPM2.f_ratio * np.min(wvls) / 2 , wvl_2_count_res_elements = 1.65e-6, verbose=True)
-# get output field 
-output_field2 = FPM2.get_output_field( input_field, wvl_lims=[0,100], keep_intermediate_products=True )
-"""
-
-# sanity check - phase_shift_diameter = 1 * f_ratio * wvls[0]  should always be dcomparable to PSF size independent of nx_size_focal_plane, dx_focal_plane
-fig, ax = plt.subplots(4,1,figsize=(10,20))
-ax[0].set_title('input phase')
-ax[0].imshow( input_field.phase[wvls[0]] )
-
-ax[1].set_title('focal plane mask (cropped')
-ax[1].imshow( FPM.phase_shift_region)
-
-ax[2].set_title('focal plane PSF')
-ax[2].imshow(  abs( FPM.Psi_B[0] )**2 )
-
-ax[3].set_title('output intensity ')
-ax[3].imshow( abs(output_field.flux[wvls[0]])**2 )
-
+# detector 
+DIT = 1 # integration time (s)
+ron = 1 #read out noise (e-) 
+pw = 2**4 # windowing (pixel_size = field_dx * pw)
+npix_det = input_field.flux[wvls[0]].shape[0]//pw # number of pixels across detector 
+pix_scale = input_field.dx * pw # m/pix
 
 # ++++++++++++++++++++++
 # DETECT 
-pw = 2**4
-DIT=1
-npix = input_field.flux[wvls[0]].shape[0]//pw
-pix_scale = input_field.dx * pw
-det = detector(npix=npix, pix_scale = pix_scale, QE={w:1 for w in input_field.wvl})
 
-start_detect = time.perf_counter()
-det.detect_field(output_field , DIT=1, include_shotnoise=True,ph_per_s_per_m2_per_nm=True,grids_aligned=True)
-end_detect = time.perf_counter()
-print(f'\n{end_detect-start_detect}s')
+det = detector(npix=npix_det, pix_scale = pix_scale, DIT= DIT, ron=ron, QE={w:1 for w in input_field.wvl})
+
+sig1 = det.detect_field( output_field, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True)
+
 
 # need to fix include_shotnoise=True,
 
@@ -1052,7 +1082,7 @@ print( '  ', np.sum(det.det))
 
 
 fig,ax = plt.subplots(1,2)
-ax[1].imshow(det.det)
+ax[1].imshow(sig1.signal)
 ax[1].set_title('detector')
 ax[0].imshow(phase_tmp)
 ax[0].set_title('input phase')
@@ -1060,64 +1090,262 @@ ax[1].axis('off')
 ax[0].axis('off')
 plt.tight_layout()
 
-#%% calibration phase maskPhase estimate 
+
+# calibration phase maskPhase estimate 
 
 FPM_cal = zernike_phase_mask(A,B,phase_shift_diameter,f_ratio,d_on,d_off,glass_on,glass_off)
+
 # optimize depths 
-FPM_cal.optimise_depths(desired_phase_shift=0, across_desired_wvls=wvls ,verbose=True)
+FPM_cal.d_off = FPM_cal.d_on
+#FPM_cal.optimise_depths(desired_phase_shift=0, across_desired_wvls=wvls ,verbose=True)
 
 output_field_cal = FPM_cal.get_output_field( input_field, wvl_lims=[0,100], \
                                     nx_size_focal_plane = nx_size_focal_plane , dx_focal_plane = dx_focal_plane, keep_intermediate_products=False )
 
 output_field_cal.define_pupil_grid(dx=input_field.dx, D_pix=input_field.D_pix)
 
-det_cal = detector(npix=npix, pix_scale = pix_scale, QE={w:1 for w in input_field.wvl})
 
-det_cal.detect_field(output_field_cal , DIT=1, include_shotnoise=True, ph_per_s_per_m2_per_nm=True,grids_aligned=True)
+sig_cal = det.detect_field( output_field_cal , include_shotnoise=True, ph_per_s_per_m2_per_nm=True,grids_aligned=True)
 
 #plt.imshow(output_field_cal.flux[wvls[0]])
 
 #  TRY JUST TAKE MEAN OF B ON DETECTOR PIXELS AT CENTRAL WAVELENGTH 
 #plt.imshow( aggregate_array(abs(FPM.b[int(len(wvls)//2)]), det.det.shape, how='mean') )
-b_est = aggregate_array(abs(FPM.b[int(len(wvls)//2)]), det.det.shape, how='mean')
+#b_est = aggregate_array(abs(FPM.b[int(len(wvls)//2)]), det.det.shape, how='mean')
 #
 
-# OK NOW try detect the field.. because at single wvl isnt working 
-det_b = detector(npix=npix, pix_scale = pix_scale, QE={w:1 for w in input_field.wvl})
 
 b_field = field(fluxes=[abs(FPM.b[i]) for i,_ in enumerate(wvls) ],\
                 phases=[np.angle(FPM.b[i]) for i,_ in enumerate(wvls) ], wvls=wvls)
     
 b_field.define_pupil_grid(dx=input_field.dx, D_pix=input_field.D_pix)
-det_b.detect_field(b_field, DIT=1, include_shotnoise=False, ph_per_s_per_m2_per_nm=True,grids_aligned=True)
 
-b_est2 = det_b.det
+sig_b = det.detect_field(b_field, include_shotnoise=False, ph_per_s_per_m2_per_nm=True, grids_aligned=True)
 
-
-# does one of these work? 
-phi_est = det.ZWFS_phase_estimator_1(A, B, b_est, det_cal.det, np.deg2rad( FPM.phase_mask_phase_shift(np.mean(wvls))) , exp_order=1)
-phi_est2 = det.ZWFS_phase_estimator_1(A, B,  1e-3*b_est2, det_cal.det, np.deg2rad( FPM.phase_mask_phase_shift(np.mean(wvls))) , exp_order=1)
+# WHY factor of 10 error in b when A=B=1??????
+phi_est = sig1.ZWFS_phase_estimator_1(A=A, B=B, b = (0.1 * sig_b.signal)**0.5, P = sig_cal.signal**0.5, \
+                                     theta = np.deg2rad( FPM.phase_mask_phase_shift(np.mean(wvls))) , exp_order=1)
 
 
+# residual 
+phi_est_in_pup = np.repeat(phi_est , pup.shape[0]/det.det.shape[0], axis=1).repeat(pup.shape[0]/det.det.shape[0], axis=0)
+#phi_est_in_pup_2 = np.repeat(phi_est2 , pup.shape[0]/det.det.shape[0], axis=1).repeat(pup.shape[0]/det.det.shape[0], axis=0)
+
+
+plt.figure()
+plt.plot( input_field.phase[wvls[0]][pup>0.5], phi_est_in_pup[pup>0.5],'.',alpha=0.01)
+plt.plot( input_field.phase[wvls[0]][pup>0.5], input_field.phase[wvls[0]][pup>0.5],'-',label='1:1')
+plt.xlabel('input phase (rad)')
+plt.ylabel('phase estimate (rad)')
+plt.legend()  
+
+
+
+
+def subplot_additions(ax,im , title,cbar_label, axis_off=False, fontsize=18):
+    ax[0].set_title( title, fontsize=fontsize )
+    divider = make_axes_locatable(ax[0])
+    cax = divider.append_axes('bottom', size='5%', pad=0.05)
+    cbar = fig.colorbar( im, cax=cax, orientation='horizontal')
+    cbar.set_label(cbar_label, rotation=0, fontsize=fontsize)
+    #cbar.tick_params(labelsize=fontsize)
+    if axis_off:
+        ax[0].axis('off')
+
+wvl_indx = wvls[0]   
+residual_wvl = ( phi_est_in_pup  - input_field.phase[wvl_indx] )
+
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 app_tmp =  zernike.zernike_basis(nterms=1, npix=det.det.shape[0])[0]
-fig,ax = plt.subplots(1,4,figsize=(10,5))
-ax[0].imshow(det.det)
-ax[1].imshow(det_cal.det)
-ax[2].imshow(b_est)
-ax[3].imshow(app_tmp * phi_est2)
+fig = plt.figure(figsize=(20, 20))
 
+ax1 = fig.add_subplot(231) # no rows, no cols, ax number 
+im1 = ax1.imshow( input_field.phase[wvl_indx] )
+subplot_additions([ax1], im1 , title='input phase'.format(round( FPM.phase_mask_phase_shift(np.mean(wvls)),1)),\
+                  cbar_label= 'phase (rad)', axis_off=True)
+ax1.text(pup.shape[0]//4, pup.shape[0]//4,'{}um strehl = {}'.format(round(wvl_indx*1e6,2), round( np.exp(-np.var(input_field.phase[wvl_indx][pup>0.5])),2) ),\
+         fontsize=18,color='w')
+    
+ax2 = fig.add_subplot(232) # no rows, no cols, ax number 
+im2 = ax2.imshow( sig1.signal )
+subplot_additions([ax2], im2 , title='detector (theta = {})'.format(round( FPM.phase_mask_phase_shift(np.mean(wvls)),1)),\
+                  cbar_label= r'Intensity (adu)', axis_off=True)    
+
+ax3 = fig.add_subplot(233) # no rows, no cols, ax number 
+im3 = ax3.imshow( sig_cal.signal )
+subplot_additions([ax3], im3 , title='detector (theta = {})'.format(round(0,1)),\
+                  cbar_label= r'Intensity (adu)', axis_off=True)   
+    
+    
+ax4 = fig.add_subplot(234) # no rows, no cols, ax number 
+im4 = ax4.imshow( phi_est * app_tmp )
+subplot_additions([ax4], im4 , title='phase estimate',\
+                  cbar_label= r'phase (rad)', axis_off=True)   
+
+ax5 = fig.add_subplot(235) # no rows, no cols, ax number 
+im5 = ax5.imshow( pup * ( residual_wvl ) )
+ax5.text(pup.shape[0]//4, pup.shape[0]//4,'{}um strehl = {}'.format(round(wvl_indx*1e6,2), round( np.exp(-np.var(residual_wvl[pup>0.5])),2) ),\
+         fontsize=18,color='w')
+subplot_additions([ax5], im5 , title='phase residual',\
+                  cbar_label= r'phase (rad)', axis_off=True)   
+
+    
+ax6 = fig.add_subplot(236) # no rows, no cols, ax number 
+ax6.hist( (input_field.phase[wvl_indx] - phi_est_in_pup)[pup>0] , bins= np.linspace(-np.pi,np.pi,30), alpha=0.4, label='residual')
+ax6.hist( input_field.phase[wvls[0]][pup>0] , bins= np.linspace(-2*np.pi,2*np.pi,30), label='prior correction',alpha=0.4)
+ax6.legend(fontsize=15)
+ax6.set_xlabel('phase (rad)',fontsize=18)
+
+#%%
+# does one of these work? 
+phi_est = det.ZWFS_phase_estimator_1(A=A, B=B, b = (1 * b_est)**0.5, P = det_cal.det**0.5, \
+                                     theta = np.deg2rad( FPM.phase_mask_phase_shift(np.mean(wvls))) , exp_order=2)
+#phi_est2 = det.ZWFS_phase_estimator_1(A=A, B=B,  b = 2*b_est2**0.5, P=det_cal.det**0.5, theta=np.deg2rad( FPM.phase_mask_phase_shift(np.mean(wvls))) , exp_order=1)
+
+
+# residual 
+phi_est_in_pup = np.repeat(phi_est[0] , pup.shape[0]/det.det.shape[0], axis=1).repeat(pup.shape[0]/det.det.shape[0], axis=0)
+#phi_est_in_pup_2 = np.repeat(phi_est2 , pup.shape[0]/det.det.shape[0], axis=1).repeat(pup.shape[0]/det.det.shape[0], axis=0)
+
+
+plt.figure()
+plt.plot( input_field.phase[wvls[0]][pup>0.5], phi_est_in_pup[pup>0.5],'.',alpha=0.01)
+plt.plot( input_field.phase[wvls[0]][pup>0.5], input_field.phase[wvls[0]][pup>0.5],'-',label='1:1')
+plt.xlabel('input phase (rad)')
+plt.ylabel('phase estimate (rad)')
+plt.legend()
+
+
+
+
+
+#%%
+def subplot_additions(ax,im , title,cbar_label, axis_off=False):
+    ax[0].set_title( title )
+    divider = make_axes_locatable(ax[0])
+    cax = divider.append_axes('bottom', size='5%', pad=0.05)
+    cbar = fig.colorbar( im, cax=cax, orientation='horizontal')
+    cbar.set_label(cbar_label, rotation=0)
+    if axis_off:
+        ax[0].axis('off')
+
+wvl_indx = wvls[0]   
+
+
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+app_tmp =  zernike.zernike_basis(nterms=1, npix=det.det.shape[0])[0]
+fig = plt.figure(figsize=(20, 20))
+
+ax1 = fig.add_subplot(831) # no rows, no cols, ax number 
+im1 = ax1.imshow( det.det )
+subplot_additions([ax1],im1 , title='detector (theta = {})'.format(round( FPM.phase_mask_phase_shift(np.mean(wvls)),1)),\
+                  cbar_label= r'Intensity $(ph)$', axis_off=True)
+    
+#ax2 = fig.add_subplot(832)
+#im2 = ax2.imshow( det_cal.det  )
+#subplot_additions([ax2],im2 , title='detector (theta = {})'.format(round( FPM_cal.phase_mask_phase_shift(np.mean(wvls)),1)),\
+#                  cbar_label= r'Intensity $(ph)$', axis_off=True)
+    
+    
+ax3 = fig.add_subplot(833)
+im3 = ax3.imshow( 1e6 * wvl_indx/(2*np.pi) * input_field.phase[wvl_indx] )
+subplot_additions([ax3],im3 , title='input phase',\
+                  cbar_label= r'opd ($\mu$m)', axis_off=True)
+    
+
+"""ax5 = fig.add_subplot(834)
+im5 = ax5.imshow(  b_est  )
+subplot_additions([ax5],im5, title='b estimate 1',\
+                  cbar_label= r'Intensity $(ph)$', axis_off=True)
+    
+ax6 = fig.add_subplot(835)
+im6 = ax6.imshow(  b_est2 )
+subplot_additions([ax6],im6 , title='b estimate 2',\
+                  cbar_label= r'Intensity $(ph)$', axis_off=True)"""
+    
+
+ax7 = fig.add_subplot(834)
+im7 = ax7.imshow(  1e6 * wvl_indx/(2*np.pi) * app_tmp * phi_est  )
+subplot_additions([ax7],im7 , title='phi est 1 ',\
+                  cbar_label= r'Intensity $(ph)$', axis_off=True)
+    
+#ax8 = fig.add_subplot(835)
+#im8 = ax8.imshow( 1e6 * wvl_indx/(2*np.pi) * app_tmp * phi_est2  )
+#subplot_additions([ax8],im8 , title='phi est 2 ',\
+#                  cbar_label= r'Intensity $(ph)$', axis_off=True)
+    
+
+ax9 = fig.add_subplot(836)
+im9 = ax9.imshow(  1e6 * wvl_indx/(2*np.pi) * pup * ( input_field.phase[wvl_indx] - phi_est_in_pup ) )
+subplot_additions([ax9],im9 , title='residual 1 ',\
+                  cbar_label= r'residual (um)', axis_off=True)
+    
+#ax10 = fig.add_subplot(837)
+#im10 = ax10.imshow(  1e6 * wvl_indx/(2*np.pi) *  pup * ( input_field.phase[wvl_indx] - phi_est_in_pup_2 ) )
+#subplot_additions([ax10],im10 , title='phi est 1 ',\
+#                  cbar_label= r'residual2 ($\mu$m)', axis_off=True)
+
+ax11 = fig.add_subplot(838)
+ax11.hist( (input_field.phase[wvl_indx] - phi_est_in_pup)[pup>0] ,alpha=0.4, label='residual');
+ax11.hist( input_field.phase[wvls[0]][pup>0] , label='prior correction',alpha=0.4)
+ax11.legend()
+
+#ax12 = fig.add_subplot(839)
+#ax12.hist( (input_field.phase[wvl_indx] - phi_est_in_pup_2)[pup>0] ,alpha=0.4, label='residual');
+#ax12.hist( input_field.phase[wvls[0]][pup>0] , label='prior correction',alpha=0.4)
+#ax12.legend()
+
+
+#%%
+
+
+
+
+
+
+ax1.set_title( )
+ax1.axis('off')
+im1 = ax1.imshow( det.det )
+
+divider = make_axes_locatable(ax1)
+cax = divider.append_axes('bottom', size='5%', pad=0.05)
+cbar = fig.colorbar( im1, cax=cax, orientation='horizontal')
+cbar.set_label( r'Intensity $(ph)$', rotation=0)
+
+
+
+
+
+
+fig,ax = plt.subplots(1,6,figsize=(10,5))
+ax[0].imshow( det.det )
+ax[1].imshow( det_cal.det )
+ax[2].imshow( b_est )
+ax[3].imshow( app_tmp * phi_est )
+ax[4].imshow( app_tmp * phi_est2 )
+ax[5].imshow (pup*(input_field.phase[wvls[0]] - phi_est_in_pup_2 ) )
 ax[0].set_title('detector (theta = {})'.format(round( FPM.phase_mask_phase_shift(np.mean(wvls)),1)) )
 ax[1].set_title('detector (theta = 0)')
 ax[2].set_title('b estimate')
-ax[3].set_title('phase estimate')
+ax[3].set_title('phase estimate 1')
+ax[4].set_title('phase estimate 2')
+ax[4].set_title('residual')
 
 for i in range(len(ax)):
     ax[i].axis('off')
 
 plt.tight_layout()
 
+#note DM correction should be an opd not phase!!!
+strehl_before = np.exp(-np.var( (input_field.phase[wvls[0]])[pup>0.5] ) )
+strehl_after = np.exp(-np.var( (input_field.phase[wvls[0]] - phi_est_in_pup_2)[pup>0.5] ) )
 
-np.repeat(det.det, 5, axis=1).repeat(5, axis=0) 
+print('strehl before = {}, strehl after = {}'.format( strehl_before , strehl_after) )
+
+plt.figure()
+plt.hist( (input_field.phase[wvls[0]] - phi_est_in_pup_2)[pup>0] ,alpha=0.4, label='residual');
+plt.hist( input_field.phase[wvls[0]][pup>0] , label='prior correction',alpha=0.4)
+plt.legend()
 
 #plt.plot( phi_est[:, det.det.shape[0]//2] )
 #X = (det.det - det_cal.det)/b_est
