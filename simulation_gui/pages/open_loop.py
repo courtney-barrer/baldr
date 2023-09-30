@@ -202,6 +202,8 @@ with col5:
         st.markdown(':red[quantum efficiency needs to be input as a float between 0-1]')
     
 
+epsilon = st.slider('phase scaling', 0.0, 10.0, 0.1, key='OL_epsilon_input')
+
 #some hard coded values 
 wvls = 1e-6 * np.linspace( wvl_min, wvl_max , Nwvl_bins )
 wvl0 = wvls[len(wvls)//2] #center wavelength roughly 
@@ -233,17 +235,21 @@ if mode == 'Kolmogorov':
     r0 = 0.1 # Fried parameter (m)
     L0 = 25 # turbulent outerscale (m)
     
-    screens = aotools.turbulence.infinitephasescreen.PhaseScreenVonKarman(D_pix, pixel_scale=dx,\
-          r0=r0 , L0=L0, n_columns=2,random_seed = 1) # phase screen (radians)
-    phase = screens.scrn
- 
-    epsilon = 0.8
+    @st.cache_data
+    def tmp_get_phase(D_pix,dx,r0,L0): # cached function to hold phase screen data 
+        screens = aotools.turbulence.infinitephasescreen.PhaseScreenVonKarman(D_pix, pixel_scale=dx,\
+            r0=r0 , L0=L0, n_columns=2,random_seed = 1) # phase screen (radians)
+        phase = screens.scrn
+        return(phase)
+    
+    phase = tmp_get_phase(D_pix,dx,r0,L0) 
+    #epsilon = 0.8
     input_phases = epsilon * np.array( [ np.nan_to_num( phase ) * (500e-9/w)**(6/5) for w in wvls] )
    
 else:
     phase = basis[basis_name2i[mode]-1]
     
-    epsilon = 5
+    #epsilon = 5
     input_phases = epsilon * np.array( [ np.nan_to_num( phase ) * (500e-9/w)**(6/5) for w in wvls] )
 
 input_fluxes = [ph_flux_H * pup  for _ in wvls] # ph_m2_s_nm
