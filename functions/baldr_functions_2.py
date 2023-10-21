@@ -653,7 +653,6 @@ class detector:
                 for m in range(self.det.shape[1]):
                     if ph_per_s_per_m2_per_nm:
                         if include_shotnoise:
-                        
                             P_wvl = np.array( [self.DIT * self.qe[w] * np.sum( field.flux[w][pw*n:pw*(n+1), pw*m:pw*(m+1)] * field.dx**2 ) for w in field_wvls] )
                             self.det[n,m] =  poisson.rvs( integrate( P_wvl  , field_wvls * 1e9) ) # draw from poission distribution with mean = np.trapz( P_wvl  , field_wvls)
                             #note 1e9 because field_wvls should be m and flux should be ph_per_s_per_m2_per_nm
@@ -820,7 +819,7 @@ class signal():
         """
         
      
-def detection_chain(input_field, dm, FPM, det):
+def detection_chain(input_field, dm, FPM, det, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True):
     # apply DM correction 
     # Pass through ZWFS (phase mask) onto back pupil
     # detect it on a detector to get a signal 
@@ -828,7 +827,7 @@ def detection_chain(input_field, dm, FPM, det):
     output_field = FPM.get_output_field( input_field_dm, wvl_lims=[0,100], nx_size_focal_plane = None, dx_focal_plane = None, keep_intermediate_products=False )
     output_field.define_pupil_grid(dx=input_field.dx, D_pix=input_field.D_pix)
     
-    sig = det.detect_field( output_field )
+    sig = det.detect_field( output_field, include_shotnoise=include_shotnoise, ph_per_s_per_m2_per_nm=ph_per_s_per_m2_per_nm, grids_aligned=grids_aligned)
     
     return( sig )
 
