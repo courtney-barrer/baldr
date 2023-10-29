@@ -177,7 +177,291 @@ fig,ax = plt.subplots(2,1)
 ax[0].imshow( sig1.signal )
 ax[1].imshow( sig2.signal )
 
-#%%
+
+
+
+#%% Interaction matrix using I(90) - I_ref(90) ) / Nph following OLIVIER FAUVARQUE 2016
+
+dim = 12*20
+stellar_dict = { 'Hmag':6,'r0':0.1,'L0':25,'V':50,'airmass':1.3,'extinction': 0.18 }
+tel_dict = { 'dim':dim,'D':1.8,'D_pix':12*20,'pup_geometry':'AT' }
+naomi_dict = { 'naomi_lag':4.5e-3, 'naomi_n_modes':14, 'naomi_lambda0':0.6e-6,\
+              'naomi_Kp':1.1, 'naomi_Ki':0.93 }
+FPM_dict = {'A':1, 'B':1, 'f_ratio':21, 'd_on':26.5e-6, 'd_off':26e-6,\
+            'glass_on':'sio2', 'glass_off':'sio2','desired_phase_shift':60,\
+                'rad_lam_o_D':1.2 ,'N_samples_across_phase_shift_region':10,\
+                    'nx_size_focal_plane':dim}
+det_dict={'DIT' : 1, 'ron' : 1, 'pw' : 20, 'QE' : 1}
+
+baldr_dict={'baldr_lag':0.5e-3,'baldr_lambda0':1.6e-6,'baldr_Ki':0.1, 'baldr_Kp':9}
+
+locals().update(stellar_dict)
+locals().update(tel_dict)
+locals().update(naomi_dict)
+locals().update(FPM_dict)
+locals().update(det_dict)
+locals().update(baldr_dict)
+
+# apply a Zernike mode to the input phase 
+wvls = np.linspace(1.4e-6,1.8e-6,10) # input wavelengths 
+
+dx = D/D_pix # grid spatial element (m/pix)
+ph_flux_H = baldr.star2photons('H', Hmag, airmass=airmass, k = extinction, ph_m2_s_nm = True) # convert stellar mag to ph/m2/s/nm 
+ph_flux_H_cal = baldr.star2photons('H', Hmag, airmass=airmass, k = extinction, ph_m2_s_nm = True) # convert stellar mag to ph/m2/s/nm 
+
+pup = baldr.pick_pupil(pupil_geometry='disk', dim=D_pix, diameter=D_pix) # baldr.AT_pupil(dim=D_pix, diameter=D_pix) #telescope pupil
+
+N_controlled_modes = 20 
+basis = zernike.zernike_basis(nterms=N_controlled_modes, npix=D_pix)
+
+
+
+## ==== CREATE calibration field, DM, phase masks, detectors, 
+
+# calibration field 
+calibration_phases = [np.nan_to_num(basis[0])  for w in wvls]
+calibration_fluxes = [ph_flux_H_cal * pup  for _ in wvls] # ph_m2_s_nm
+
+calibration_field = baldr.field( phases = calibration_phases, fluxes = calibration_fluxes  , wvls=wvls )
+calibration_field.define_pupil_grid( dx=dx, D_pix=D_pix )
+
+# 
+N_act=[12,12]
+pup_inner = baldr.pick_pupil(pupil_geometry='disk', dim=D_pix, diameter=D_pix-D_pix//N_act[0]) # define DM pupil a little smaller 
+dm = baldr.DM(surface=np.zeros(N_act), gain=1, angle=0,surface_type = 'continuous') 
+
+phase_shift_diameter = rad_lam_o_D * f_ratio * wvls[0]   ##  f_ratio * wvls[0] = lambda/D  given f_ratio
+FPM = baldr.zernike_phase_mask(A,B,phase_shift_diameter,f_ratio,d_on,d_off,glass_on,glass_off)
+
+FPM.optimise_depths(desired_phase_shift=desired_phase_shift, across_desired_wvls=wvls ,verbose=True)
+
+FPM_cal = baldr.zernike_phase_mask(A,B,phase_shift_diameter,f_ratio,d_on,d_off,glass_on,glass_off)
+FPM_cal.d_off = FPM_cal.d_on
+
+# set up detector object
+det = baldr.detector(npix=npix_det, pix_scale = pix_scale_det , DIT= DIT, ron=ron, QE={w:QE for w in wvls})
+mask = baldr.pick_pupil(pupil_geometry='disk', dim=det.npix, diameter=det.npix) 
+
+
+
+
+## ==== CREATE INTERACTION MATRIX
+# modal IM  (modal)  
+cmd = np.zeros( dm.surface.reshape(-1).shape ) 
+dm.update_shape(cmd) #zero dm first
+
+
+# get the reference signal from calibration field with phase mask in
+sig_on_ref = baldr.detection_chain(calibration_field, dm, FPM, det)
+sig_on_ref.signal = np.mean( [baldr.detection_chain(calibration_field, dm, FPM, det).signal for _ in range(10)]  , axis=0) # average over a few 
+
+# estimate #photons of in calibration field by removing phase mask (zero phase shift)   
+sig_off_ref = baldr.detection_chain(calibration_field, dm, FPM_cal, det)
+sig_off_ref.signal = np.mean( [baldr.detection_chain(calibration_field, dm, FPM_cal, det).signal for _ in range(10)]  , axis=0) # average over a few 
+Nph_cal = np.sum(sig_off_ref.signal)
+
+# Put modes on DM and measure signals from calibration field
+pokeAmp = 50e-9
+
+# CREATE THE CONTROL BASIS FOR OUR DM
+control_basis = baldr.create_control_basis(dm=dm, N_controlled_modes=N_controlled_modes, basis_modes='zernike')
+
+# BUILD OUR INTERACTION AND CONTROL MATRICESFROM THE CALIBRATION SOURCE AND OUR ZWFS SETUP
+IM_modal, pinv_IM_modal = baldr.build_IM(calibration_field=calibration_field, dm=dm, FPM=FPM, det=det, control_basis=control_basis, pokeAmp=pokeAmp)
+
+U,S,Vt = np.linalg.svd( IM_modal )
+plt.figure()
+plt.loglog(S)
+plt.ylabel('singular values')
+plt.xlabel('mode #')
+
+
+
+#%% ==== OPEN LOOP CORRCTION 
+#now create our input field & correct it with WFS ut_phases = [np.nan_to_num(basis[7]) * (500e-9/w)**(6/5) for w in wvls]
+
+
+#scrn_seed = baldr.PhaseScreen_PostAO(nx_size=dim, pixel_scale=dx, r0=0.15, L0=20, D=1.8, sigma2_ao =  -np.log( 0.5 ) , N_act=144)
+#for i in range(1000): scrn_seed.add_row()
+
+
+
+input_fluxes = [10 * ph_flux_H * pup  for _ in wvls] # ph_m2_s_nm
+input_phases = [np.nan_to_num(basis[4]) * (500e-9/w)**(6/5) for w in wvls] #particular mode
+#aaa = 1 * np.sum([ a * np.nan_to_num(basis[i]) for a, i in zip(np.random.rand(10), range(10))],axis=0)
+#input_phases = [aaa * (500e-9/w)**(6/5) for w in wvls] 
+#input_phases = [  pup * scrn_seed.scrn * (500e-9/wvls[-1])**(6/5) for w in wvls]
+
+input_field = baldr.field( phases = input_phases  , fluxes = input_fluxes  , wvls=wvls )
+
+input_field.define_pupil_grid(dx=dx, D_pix=D_pix)
+
+"""
+sig_on = baldr.detection_chain(input_field, dm, FPM, det)
+sig_on_ref = baldr.detection_chain(calibration_field, dm, FPM, det)
+
+sig_off = baldr.detection_chain(input_field, dm, FPM_cal, det)
+sig_off.signal = np.mean( [baldr.detection_chain(input_field, dm, FPM_cal, det).signal for _ in range(10)]  , axis=0) # average over a few 
+
+Nph = np.sum(sig_off.signal)
+
+# check it makes sense
+fig,ax = plt.subplots(1,2,figsize=(8,4))
+ax[0].imshow( input_field.phase[wvls[-1]] )
+ax[0].set_title('field input phase')
+ax[1].imshow( 1/Nph * (sig_on.signal - sig_on_ref.signal) ) # * mask)
+ax[1].set_title('normalized detector signal ')
+"""
+
+#zero dm first
+cmd = np.zeros( dm.surface.reshape(-1).shape ) 
+dm.update_shape(cmd) 
+
+# estimate #photons 
+sig_off=baldr.detection_chain(input_field, dm, FPM_cal, det)
+sig_off.signal = np.mean( [baldr.detection_chain(input_field, dm, FPM_cal, det).signal for _ in range(10)]  , axis=0) # average over a few 
+Nph = np.sum(sig_off.signal)
+
+# detect input field
+sig_turb = baldr.detection_chain(input_field, dm, FPM, det)
+
+#important to scale reference field by ratio of phtons in calibrator vs target 
+modal_reco_list = pinv_IM_modal.T @ (  1/Nph * (sig_turb.signal - Nph/Nph_cal * sig_on_ref.signal) ).reshape(-1) 
+gains =  -pokeAmp * np.ones( len(modal_reco_list) ) #[0] + list(-25e-9 * np.ones( len(modal_reco_list)-1 )) +[0]
+
+dm_reco = np.sum( np.array([gains[i] * a * Z for i,(a,Z) in enumerate( zip(modal_reco_list, control_basis))]) , axis=0)
+
+
+cmd=dm_reco.reshape(-1)
+
+dm.update_shape( cmd )   
+
+
+plt.plot( np.linspace(-1,1,len(dm.surface)), dm.surface[len(dm.surface)//2,:] ); plt.plot(np.linspace(-1,1,len(input_field.phase[wvls[0]])), input_field.phase[wvls[0]][len(input_field.phase[wvls[0]])//2,:] )
+
+plt.figure()
+plt.imshow(dm.surface) 
+
+
+
+input_field_dm = input_field.applyDM(dm)
+
+
+print(f'opd before = {np.std( input_field.phase[wvls[0]][pup_inner>0] )}nm rms')
+print(f'opd after = {np.std( input_field_dm.phase[wvls[0]][pup_inner>0] )}nm rms')
+#sig_after = baldr.detection_chain(input_field, dm, FPM, det)
+
+i=0
+plot_ao_correction_process( phase_before= 1e6 *wvls[i]/(2*np.pi)* input_field.phase[wvls[i]] , phase_reco = 1e6 *dm.surface, phase_after = 1e6 *wvls[i]/(2*np.pi)*input_field_dm.phase[wvls[i]] , title_list =None)
+
+
+
+# %%==== CLOSED LOOP CORRCTION 
+
+
+# init phase screen from first stage AO  (define Strehl, r0 at wvls[-1])
+#scrn_seed = baldr.PhaseScreen_PostAO(nx_size=dim, pixel_scale=dx, r0=0.1, L0=23, D=1.8, sigma2_ao =  -np.log( 0.2 ) , N_act=44)
+#for i in range(1000): scrn_seed.add_row() # run it to get rid of transiet behaviour 
+# baldr.PhaseScreen_PostAO( seems to always evolve to very high strehls independent of sigma2_ao ??
+
+scrn_seed = baldr.PhaseScreenKolmogorov(nx_size=dim, pixel_scale=dx, r0=0.1, L0=23)
+AscalefactoR =  15e-2 # to scale input phase screen by 
+
+
+# keep input fluxes constant 
+input_fluxes = [10 * ph_flux_H * pup  for _ in wvls] # ph_m2_s_nm
+
+# init phase screens (note we definer0 etc at wvls[-1])
+input_phases = [pup * AscalefactoR  *  scrn_seed.scrn * (wvls[-1]/w)**(6/5) for w in wvls] #(500e-9/w)**(6/5) for w in wvls]
+input_field = baldr.field( phases = input_phases  , fluxes = input_fluxes  , wvls=wvls )
+input_field.define_pupil_grid(dx=dx, D_pix=D_pix)
+
+#zero dm first
+cmd = np.zeros( dm.surface.reshape(-1).shape ) 
+dm.update_shape(cmd) 
+
+# initial estimate #photons 
+sig_off.signal = np.mean( [baldr.detection_chain(input_field, dm, FPM_cal, det).signal for _ in range(10)]  , axis=0) # average over a few 
+Nph = np.sum(sig_off.signal)
+
+#baldr PI parameters 
+Kp= 0.1 #0.05 #0.9
+Ki= 0.9 #0.95  #0.5
+
+
+# init performance tracking lists 
+opd_before = [ np.std(input_field.phase[wvls[0]][pup>0.5] ) ]
+opd_after= [ np.std(input_field.phase[wvls[0]][pup>0.5] ) ]
+strehl_before = [ np.exp(-np.var(input_field.phase[wvls[0]][pup>0.5] ) ) ]
+strehl_after = [ np.exp(-np.var(input_field.phase[wvls[0]][pup>0.5] ) ) ]
+for it in range(100):
+    
+    print(it) 
+    # roll phase screen 
+    new_phases = {w:pup * AscalefactoR * scrn_seed.add_row() * (500e-9/w)**(6/5) for w in wvls}
+    
+    # append to field 
+    input_field.phases = new_phases 
+
+    
+    if 0: #np.mod(it,5)==0:  # every so often we take out phase mask to measure #photons 
+        # estimate #photons 
+        sig_off.signal = np.mean( [baldr.detection_chain(input_field, dm, FPM_cal, det).signal for _ in range(10)]  , axis=0) # average over a few 
+        Nph = np.sum(sig_off.signal)
+
+
+    
+    # detect input field
+    sig_turb = baldr.detection_chain(input_field, dm, FPM, det)
+
+    # reconstruct the phase 
+    #important to scale reference field by ratio of phtons in calibrator vs target 
+    modal_reco_list = pinv_IM_modal.T @ (  1/Nph * (sig_turb.signal - Nph/Nph_cal * sig_on_ref.signal) ).reshape(-1) 
+    gains =  -pokeAmp * np.ones( len(modal_reco_list) ) #[0] + list(-25e-9 * np.ones( len(modal_reco_list)-1 )) +[0]
+    err_signal = np.sum( np.array([gains[i] * a * Z for i,(a,Z) in enumerate( zip(modal_reco_list, control_basis))]) , axis=0)
+
+    # get the error signal
+    new_cmd = err_signal.reshape(-1)
+    
+    # applyy PI control 
+    cmd = Kp * new_cmd + Ki * cmd
+    
+    # update DM shape
+    dm.update_shape(cmd) 
+    
+    # apply new DM shape to input field 
+    input_field = input_field.applyDM(dm)
+    
+    opd_before.append( wvls[0]/(np.pi*2) * np.std(AscalefactoR * scrn_seed.scrn[pup>0.5] * (wvls[-1]/wvls[0])**(6/5)) )
+    
+    opd_after.append( wvls[0]/(np.pi*2) * np.std(input_field.phase[wvls[0]][pup>0.5] ) )
+    
+    strehl_before.append( np.exp(-np.var(AscalefactoR * scrn_seed.scrn[pup>0.5] * (wvls[-1]/wvls[0])**(6/5)) ) )
+    
+    strehl_after.append( np.exp(-np.var(input_field.phase[wvls[0]][pup>0.5] ) ) )
+    
+    
+"""
+plt.plot( opd_before, label='1st STAGE AO')
+plt.plot(opd_after, label='1st STAGE AO + BALDR')
+plt.legend()
+"""
+plt.plot( strehl_before, label='1st STAGE AO')
+plt.plot( strehl_after, label='1st STAGE AO + BALDR')
+plt.legend()
+
+
+
+
+
+
+
+
+
+
+
+#%% OLD STUFF BELOW
+
 # Now put a mode on input with two masks (0 and 90 deg phase shift)and see if we can correct with DM from inverse IM 
 
 # np.linalg.pinv(IM)
@@ -451,276 +735,6 @@ print(f'opd after = {np.std( input_field_dm.phase[wvls[0]] )}nm rms')
 
 i=0
 plot_ao_correction_process( phase_before= 1e6 *wvls[i]/(2*np.pi)* input_field.phase[wvls[i]] , phase_reco = 1e6 *dm.surface, phase_after = 1e6 *wvls[i]/(2*np.pi)*input_field_dm.phase[wvls[i]] , title_list =None)
-
-
-
-#%% Interaction matrix using I(90) - I_ref(90) ) / Nph following OLIVIER FAUVARQUE 2016
-
-dim = 12*20
-stellar_dict = { 'Hmag':6,'r0':0.1,'L0':25,'V':50,'airmass':1.3,'extinction': 0.18 }
-tel_dict = { 'dim':dim,'D':1.8,'D_pix':12*20,'pup_geometry':'AT' }
-naomi_dict = { 'naomi_lag':4.5e-3, 'naomi_n_modes':14, 'naomi_lambda0':0.6e-6,\
-              'naomi_Kp':1.1, 'naomi_Ki':0.93 }
-FPM_dict = {'A':1, 'B':1, 'f_ratio':21, 'd_on':26.5e-6, 'd_off':26e-6,\
-            'glass_on':'sio2', 'glass_off':'sio2','desired_phase_shift':60,\
-                'rad_lam_o_D':1.2 ,'N_samples_across_phase_shift_region':10,\
-                    'nx_size_focal_plane':dim}
-det_dict={'DIT' : 1, 'ron' : 1, 'pw' : 20, 'QE' : 1}
-
-baldr_dict={'baldr_lag':0.5e-3,'baldr_lambda0':1.6e-6,'baldr_Ki':0.1, 'baldr_Kp':9}
-
-locals().update(stellar_dict)
-locals().update(tel_dict)
-locals().update(naomi_dict)
-locals().update(FPM_dict)
-locals().update(det_dict)
-locals().update(baldr_dict)
-
-# apply a Zernike mode to the input phase 
-wvls = np.linspace(1.4e-6,1.7e-6,10) # input wavelengths 
-
-dx = D/D_pix # grid spatial element (m/pix)
-ph_flux_H = baldr.star2photons('H', Hmag, airmass=airmass, k = extinction, ph_m2_s_nm = True) # convert stellar mag to ph/m2/s/nm 
-ph_flux_H_cal = baldr.star2photons('H', Hmag, airmass=airmass, k = extinction, ph_m2_s_nm = True) # convert stellar mag to ph/m2/s/nm 
-
-pup = baldr.pick_pupil(pupil_geometry='disk', dim=D_pix, diameter=D_pix) # baldr.AT_pupil(dim=D_pix, diameter=D_pix) #telescope pupil
-
-basis = zernike.zernike_basis(nterms=20, npix=D_pix)
-
-
-
-## ==== CREATE calibration field, DM, phase masks, detectors, 
-
-# calibration field 
-calibration_phases = [np.nan_to_num(basis[0])  for w in wvls]
-calibration_fluxes = [ph_flux_H_cal * pup  for _ in wvls] # ph_m2_s_nm
-
-calibration_field = baldr.field( phases = calibration_phases, fluxes = calibration_fluxes  , wvls=wvls )
-calibration_field.define_pupil_grid( dx=dx, D_pix=D_pix )
-
-# 
-N_act=[12,12]
-pup_inner = baldr.pick_pupil(pupil_geometry='disk', dim=D_pix, diameter=D_pix-D_pix//N_act[0]) # define DM pupil a little smaller 
-dm = baldr.DM(surface=np.zeros(N_act), gain=1, angle=0,surface_type = 'continuous') 
-
-phase_shift_diameter = rad_lam_o_D * f_ratio * wvls[0]   ##  f_ratio * wvls[0] = lambda/D  given f_ratio
-FPM = baldr.zernike_phase_mask(A,B,phase_shift_diameter,f_ratio,d_on,d_off,glass_on,glass_off)
-
-FPM.optimise_depths(desired_phase_shift=desired_phase_shift, across_desired_wvls=wvls ,verbose=True)
-
-FPM_cal = baldr.zernike_phase_mask(A,B,phase_shift_diameter,f_ratio,d_on,d_off,glass_on,glass_off)
-FPM_cal.d_off = FPM_cal.d_on
-
-# set up detector object
-det = baldr.detector(npix=npix_det, pix_scale = pix_scale_det , DIT= DIT, ron=ron, QE={w:QE for w in wvls})
-mask = baldr.pick_pupil(pupil_geometry='disk', dim=det.npix, diameter=det.npix) 
-
-
-
-
-
-## ==== CREATE INTERACTION MATRIX
-# modal IM  (modal)  
-cmd = np.zeros( dm.surface.reshape(-1).shape ) 
-dm.update_shape(cmd) #zero dm first
-
-modal_signal_list = []
-zernike_control_basis  = [np.nan_to_num(b) for b in zernike.zernike_basis(nterms=70, npix=dm.N_act[0]) ]
-
-# get the reference signal from calibration field with phase mask in
-sig_on_ref = baldr.detection_chain(calibration_field, dm, FPM, det)
-sig_on_ref.signal = np.mean( [baldr.detection_chain(calibration_field, dm, FPM, det).signal for _ in range(10)]  , axis=0) # average over a few 
-
-# estimate #photons of in calibration field by removing phase mask (zero phase shift)   
-sig_off_ref = baldr.detection_chain(calibration_field, dm, FPM_cal, det)
-sig_off_ref.signal = np.mean( [baldr.detection_chain(calibration_field, dm, FPM_cal, det).signal for _ in range(10)]  , axis=0) # average over a few 
-Nph_cal = np.sum(sig_off_ref.signal)
-
-# Put modes on DM and measure signals from calibration field
-#sig = baldr.detection_chain(calibration_field, dm, FPM, det)
-pokeAmp = 50e-9
-for b in zernike_control_basis:
-    cmd = pokeAmp * b.reshape(1,-1)[0]
-    
-    dm.update_shape(cmd)
-
-    sig = baldr.detection_chain(calibration_field, dm, FPM, det)
-    #average over a few 
-    sig.signal = np.mean( [baldr.detection_chain(calibration_field, dm, FPM, det).signal for _ in range(10)] ,axis=0)
-    modal_signal_list.append( sig ) 
-
-
-
-# Now create our iteraction matrix by filling rows with meta intensities (as defined in OLIVIER FAUVARQUE 2016)
-IM_modal = []
-for s in modal_signal_list:
-    IM_modal.append( list( ( 1/Nph_cal * (s.signal - sig_on_ref.signal) ).reshape(-1) )  )   # filter out modes that are outside pupil with mask
-
-# check condition 
-print('condition of IM_modal=', np.linalg.cond( IM_modal ))
-# calculate control matrix (inverse of interaction matrix )
-pinv_IM_modal = np.linalg.pinv(IM_modal)
-
-# calculate singular values for interaaction matrix and plot 
-U,S,Vt = np.linalg.svd( IM_modal )
-plt.figure()
-plt.loglog(S)
-plt.ylabel('singular values')
-plt.xlabel('mode #')
-
-#%% ==== OPEN LOOP CORRCTION 
-#now create our input field & correct it with WFS ut_phases = [np.nan_to_num(basis[7]) * (500e-9/w)**(6/5) for w in wvls]
-
-
-scrn_seed = baldr.PhaseScreen_PostAO(nx_size=dim, pixel_scale=dx, r0=0.1, L0=1, D=1.8, sigma2_ao = np.sqrt( -np.log( 0.5 ) ), N_act=144)
-for i in range(1000): scrn_seed.add_row()
-
-
-
-input_fluxes = [10 * ph_flux_H * pup  for _ in wvls] # ph_m2_s_nm
-#input_phases = [np.nan_to_num(basis[10]) * (500e-9/w)**(6/5) for w in wvls] #particular mode
-#aaa = 1 * np.sum([ a * np.nan_to_num(basis[i]) for a, i in zip(np.random.rand(10), range(10))],axis=0)
-#input_phases = [aaa * (500e-9/w)**(6/5) for w in wvls] 
-input_phases = [5 * pup * scrn_seed.scrn * (500e-9/w)**(6/5) for w in wvls]
-
-input_field = baldr.field( phases = input_phases  , fluxes = input_fluxes  , wvls=wvls )
-
-input_field.define_pupil_grid(dx=dx, D_pix=D_pix)
-
-"""
-sig_on = baldr.detection_chain(input_field, dm, FPM, det)
-sig_on_ref = baldr.detection_chain(calibration_field, dm, FPM, det)
-
-sig_off = baldr.detection_chain(input_field, dm, FPM_cal, det)
-sig_off.signal = np.mean( [baldr.detection_chain(input_field, dm, FPM_cal, det).signal for _ in range(10)]  , axis=0) # average over a few 
-
-Nph = np.sum(sig_off.signal)
-
-# check it makes sense
-fig,ax = plt.subplots(1,2,figsize=(8,4))
-ax[0].imshow( input_field.phase[wvls[-1]] )
-ax[0].set_title('field input phase')
-ax[1].imshow( 1/Nph * (sig_on.signal - sig_on_ref.signal) ) # * mask)
-ax[1].set_title('normalized detector signal ')
-"""
-
-#zero dm first
-cmd = np.zeros( dm.surface.reshape(-1).shape ) 
-dm.update_shape(cmd) 
-
-# estimate #photons 
-sig_off.signal = np.mean( [baldr.detection_chain(input_field, dm, FPM_cal, det).signal for _ in range(10)]  , axis=0) # average over a few 
-Nph = np.sum(sig_off.signal)
-
-# detect input field
-sig_turb = baldr.detection_chain(input_field, dm, FPM, det)
-
-#important to scale reference field by ratio of phtons in calibrator vs target 
-modal_reco_list = pinv_IM_modal.T @ (  1/Nph * (sig_turb.signal - Nph/Nph_cal * sig_on_ref.signal) ).reshape(-1) 
-gains =  -pokeAmp * np.ones( len(modal_reco_list) ) #[0] + list(-25e-9 * np.ones( len(modal_reco_list)-1 )) +[0]
-dm_reco = np.sum( np.array([gains[i] * a * Z for i,(a,Z) in enumerate( zip(modal_reco_list, zernike_control_basis))]) , axis=0)
-
-cmd=dm_reco.reshape(-1)
-
-dm.update_shape( cmd )   
-
-
-plt.plot( np.linspace(-1,1,len(dm.surface)), dm.surface[len(dm.surface)//2,:] ); plt.plot(np.linspace(-1,1,len(input_field.phase[wvls[0]])), input_field.phase[wvls[0]][len(input_field.phase[wvls[0]])//2,:] )
-
-plt.figure()
-plt.imshow(dm.surface) 
-
-
-
-input_field_dm = input_field.applyDM(dm)
-
-
-print(f'opd before = {np.std( input_field.phase[wvls[0]][pup_inner>0] )}nm rms')
-print(f'opd after = {np.std( input_field_dm.phase[wvls[0]][pup_inner>0] )}nm rms')
-#sig_after = baldr.detection_chain(input_field, dm, FPM, det)
-
-i=0
-plot_ao_correction_process( phase_before= 1e6 *wvls[i]/(2*np.pi)* input_field.phase[wvls[i]] , phase_reco = 1e6 *dm.surface, phase_after = 1e6 *wvls[i]/(2*np.pi)*input_field_dm.phase[wvls[i]] , title_list =None)
-
-
-
-# %%==== CLOSED LOOP CORRCTION 
-
-
-# init phase screen from first stage AO  (define Strehl, r0 at wvls[-1])
-scrn_seed = baldr.PhaseScreen_PostAO(nx_size=dim, pixel_scale=dx, r0=0.1, L0=1, D=1.8, sigma2_ao =  -np.log( 0.5 ) , N_act=144)
-for i in range(1000): scrn_seed.add_row() # run it to get rid of transiet behaviour 
-
-# keep input fluxes constant 
-input_fluxes = [10 * ph_flux_H * pup  for _ in wvls] # ph_m2_s_nm
-
-# init phase screens (note we definer0 etc at wvls[-1])
-input_phases = [pup * scrn_seed.scrn * (wvls[-1]/w)**(6/5) for w in wvls] #(500e-9/w)**(6/5) for w in wvls]
-input_field = baldr.field( phases = input_phases  , fluxes = input_fluxes  , wvls=wvls )
-input_field.define_pupil_grid(dx=dx, D_pix=D_pix)
-
-#zero dm first
-cmd = np.zeros( dm.surface.reshape(-1).shape ) 
-dm.update_shape(cmd) 
-
-# initial estimate #photons 
-sig_off.signal = np.mean( [baldr.detection_chain(input_field, dm, FPM_cal, det).signal for _ in range(10)]  , axis=0) # average over a few 
-Nph = np.sum(sig_off.signal)
-
-#baldr PI parameters 
-Kp= 0.05 #0.9
-Ki=0.95  #0.5
-
-
-# init performance tracking lists 
-opd_before = [ np.std(input_field.phase[wvls[0]][pup>0.5] ) ]
-opd_after= [ np.std(input_field.phase[wvls[0]][pup>0.5] ) ]
-for it in range(100):
-    
-    print(it) 
-    # roll phase screen 
-    new_phases = {w:pup * scrn_seed.add_row() * (500e-9/w)**(6/5) for w in wvls}
-    
-    # append to field 
-    input_field.phases = new_phases = {w:pup * scrn_seed.add_row() * (500e-9/w)**(6/5) for w in wvls}
-
-    
-    if 0: #np.mod(it,5)==0:  # every so often we take out phase mask to measure #photons 
-        # estimate #photons 
-        sig_off.signal = np.mean( [baldr.detection_chain(input_field, dm, FPM_cal, det).signal for _ in range(10)]  , axis=0) # average over a few 
-        Nph = np.sum(sig_off.signal)
-
-
-    
-    # detect input field
-    sig_turb = baldr.detection_chain(input_field, dm, FPM, det)
-
-    # reconstruct the phase 
-    #important to scale reference field by ratio of phtons in calibrator vs target 
-    modal_reco_list = pinv_IM_modal.T @ (  1/Nph * (sig_turb.signal - Nph/Nph_cal * sig_on_ref.signal) ).reshape(-1) 
-    gains =  -pokeAmp * np.ones( len(modal_reco_list) ) #[0] + list(-25e-9 * np.ones( len(modal_reco_list)-1 )) +[0]
-    err_signal = np.sum( np.array([gains[i] * a * Z for i,(a,Z) in enumerate( zip(modal_reco_list, zernike_control_basis))]) , axis=0)
-
-    # get the error signal
-    new_cmd = err_signal.reshape(-1)
-    
-    # applyy PI control 
-    cmd = Kp * new_cmd + Ki * cmd
-    
-    # update DM shape
-    dm.update_shape(cmd) 
-    
-    # apply new DM shape to input field 
-    input_field = input_field.applyDM(dm)
-    
-    opd_before.append( np.std(scrn_seed.scrn[pup>0.5] * (wvls[-1]/wvls[0])**(6/5)) )
-    
-    opd_after.append( np.std(input_field.phase[wvls[0]][pup>0.5] ) )
-    
-
-plt.plot( opd_before, label='1st STAGE AO')
-plt.plot(opd_after, label='1st STAGE AO + BALDR')
-plt.legend()
 
 
 
