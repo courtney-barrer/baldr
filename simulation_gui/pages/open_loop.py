@@ -26,181 +26,183 @@ if "visibility" not in st.session_state:
     st.session_state.placeholder = 'write here'
     
 
+
+
 with col1:
-    st.markdown('grid & pupil setup')
-    
-    dim = st.text_input("Nx pixels", value=12*20, label_visibility=st.session_state.visibility,\
-    disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_dim_input')
-    
-    try:
-        dim = int(dim)
-    except:
-        st.markdown(':red[Nx pixels needs to be input as an integer]')
-    
-    D = st.text_input("telescope diameter (m)", value=1.8, label_visibility=st.session_state.visibility,\
-    disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_D_input')
-    
-    try:
-        D = float(D)
-    except:
-        st.markdown(':red[telescope diameter needs to be input as a float]')
-    
-    D_pix = st.text_input("pixels across pupil", value=12*20, label_visibility=st.session_state.visibility,\
-    disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_Dpix_input')
-    
-    try:
-        D_pix = int(D_pix)
-    except:
-        st.markdown(':red[pixels across pupil needs to be input as an int > 0]')
-    
-    pup_geometry = st.selectbox('Pupil geometry',('disk', 'AT', 'UT'), index=0, key='OL_geompupil_input')
-    
+	st.markdown('grid & pupil setup')
+
+	dim = st.text_input("Nx pixels", value=12*20, label_visibility=st.session_state.visibility,\
+	disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_dim_input')
+
+	try:
+		dim = int(dim)
+	except:
+		st.markdown(':red[Nx pixels needs to be input as an integer]')
+
+	D = st.text_input("telescope diameter (m)", value=1.8, label_visibility=st.session_state.visibility,\
+	disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_D_input')
+
+	try:
+		D = float(D)
+	except:
+		st.markdown(':red[telescope diameter needs to be input as a float]')
+
+	D_pix = st.text_input("pixels across pupil", value=12*20, label_visibility=st.session_state.visibility,\
+	disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_Dpix_input')
+
+	try:
+		D_pix = int(D_pix)
+	except:
+		st.markdown(':red[pixels across pupil needs to be input as an int > 0]')
+
+	pup_geometry = st.selectbox('Pupil geometry',('disk', 'AT', 'UT'), index=0, key='OL_geompupil_input')
+
 
 with col2:
-    st.markdown('input field setup')
-    
-    Nwvl_bins = st.text_input("wavelength bins", value=10, label_visibility=st.session_state.visibility,\
-    disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_wbins_input')
-    
-    try:
-        Nwvl_bins = int(Nwvl_bins)
-    except:
-        st.markdown(':red[wavelength bins needs to be input as an int > 0]')
-    
-    wvl_min =  st.text_input("min wavelength (um)", value=1, label_visibility=st.session_state.visibility,\
-    disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_wvlmin_input')
-    
-    try:
-        wvl_min = float(wvl_min)
-    except:
-        st.markdown(':red[min wavelength needs to be input as a float in micrometers]')
-        
-    wvl_max = st.text_input("max wavelength (um)", value=2, label_visibility=st.session_state.visibility,\
-    disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_wvlmax_input')
-    
-    try:
-        wvl_max = float(wvl_max)
-    except:
-        st.markdown(':red[max wavelength needs to be input as a float in micrometers]')
-    
-    
-    mode = st.selectbox('input phase mode',['Kolmogorov'] + [zernike.zern_name(i) for i in range(1,20)], index=0, key='OL_phase_input')
-    
-    
-    Hmag = st.text_input("Hmag", value=2, label_visibility=st.session_state.visibility,\
-    disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_Hmag_input')
-    
-    try:
-        Hmag = float(Hmag)
-    except:
-        st.markdown(':red[Hmag needs to be input as a float]')
-    
-    airmass = st.text_input("airmass", value=1.3, label_visibility=st.session_state.visibility,\
-    disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_airmas_input')
-    
-    try:
-        airmass = float(airmass)
-    except:
-        st.markdown(':red[airmass needs to be input as a float]')
-    
-    
-    
+	st.markdown('input field setup')
+
+	Nwvl_bins = st.text_input("wavelength bins", value=10, label_visibility=st.session_state.visibility,\
+	disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_wbins_input')
+
+	try:
+		Nwvl_bins = int(Nwvl_bins)
+	except:
+		st.markdown(':red[wavelength bins needs to be input as an int > 0]')
+
+	wvl_min =  st.text_input("min wavelength (um)", value=1, label_visibility=st.session_state.visibility,\
+	disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_wvlmin_input')
+
+	try:
+		wvl_min = float(wvl_min)
+	except:
+		st.markdown(':red[min wavelength needs to be input as a float in micrometers]')
+	
+	wvl_max = st.text_input("max wavelength (um)", value=2, label_visibility=st.session_state.visibility,\
+	disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_wvlmax_input')
+
+	try:
+		wvl_max = float(wvl_max)
+	except:
+		st.markdown(':red[max wavelength needs to be input as a float in micrometers]')
+
+
+	mode = st.selectbox('input phase mode',['Kolmogorov'] + [zernike.zern_name(i) for i in range(1,20)], index=0, key='OL_phase_input')
+
+
+	Hmag = st.text_input("Hmag", value=2, label_visibility=st.session_state.visibility,\
+	disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_Hmag_input')
+
+	try:
+		Hmag = float(Hmag)
+	except:
+		st.markdown(':red[Hmag needs to be input as a float]')
+
+	airmass = st.text_input("airmass", value=1.3, label_visibility=st.session_state.visibility,\
+	disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_airmas_input')
+
+	try:
+		airmass = float(airmass)
+	except:
+		st.markdown(':red[airmass needs to be input as a float]')
+
+
+
 with col3:
-    st.markdown('phase mask setup')
-    
-    A = st.text_input("off-axis transparency (0-1)", value=1, label_visibility=st.session_state.visibility,\
-    disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_A_input')
-    
-    try:
-        A = float(A)
-    except:
-        st.markdown(':red[off-axis transparency needs to be input as a float between 0-1]')
-    
-    B = st.text_input("on-axis transparency (0-1)", value=1, label_visibility=st.session_state.visibility,\
-    disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_B_input')
-    
-    try:
-        B = float(B)
-    except:
-        st.markdown(':red[on-axis transparency needs to be input as a float between 0-1]')
-    
-    glass_on = st.selectbox('glass on-axis',('sio2', 'su8'), index=0 ,key='OL_glasson_input')
-    
-    glass_off = st.selectbox('glass off-axis',('sio2', 'su8'), index=0 ,key='OL_glassoff_input')
-    
-    f_ratio = st.text_input("f-ratio", value=21, label_visibility=st.session_state.visibility,\
-    disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_fratio_input')
-    
-    try:
-        f_ratio = float(f_ratio)
-    except:
-        st.markdown(':red[f_ratio needs to be input as a float]')
-    
-    desired_phase_shift = st.text_input("desired phase shift (deg)", value=90, label_visibility=st.session_state.visibility,\
-    disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_phaseshift_input')
-    
-    try:
-        desired_phase_shift = float(desired_phase_shift)
-    except:
-        st.markdown(':red[desired phase shift needs to be input as a float]')
+	st.markdown('phase mask setup')
 
-    diam_lam_o_D = st.text_input(r'phase mask diameter ($\lambda/D$)', value=1, label_visibility=st.session_state.visibility,\
-    disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_FPMdiam_input')
-    
-    try:
-        diam_lam_o_D = float(diam_lam_o_D)
-    except:
-        st.markdown(':red[phase mask diameter needs to be input as a float]')
- 
+	A = st.text_input("off-axis transparency (0-1)", value=1, label_visibility=st.session_state.visibility,\
+	disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_A_input')
+
+	try:
+		A = float(A)
+	except:
+		st.markdown(':red[off-axis transparency needs to be input as a float between 0-1]')
+
+	B = st.text_input("on-axis transparency (0-1)", value=1, label_visibility=st.session_state.visibility,\
+	disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_B_input')
+
+	try:
+		B = float(B)
+	except:
+		st.markdown(':red[on-axis transparency needs to be input as a float between 0-1]')
+
+	glass_on = st.selectbox('glass on-axis',('sio2', 'su8'), index=0 ,key='OL_glasson_input')
+
+	glass_off = st.selectbox('glass off-axis',('sio2', 'su8'), index=0 ,key='OL_glassoff_input')
+
+	f_ratio = st.text_input("f-ratio", value=21, label_visibility=st.session_state.visibility,\
+	disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_fratio_input')
+
+	try:
+		f_ratio = float(f_ratio)
+	except:
+		st.markdown(':red[f_ratio needs to be input as a float]')
+
+	desired_phase_shift = st.text_input("desired phase shift (deg)", value=90, label_visibility=st.session_state.visibility,\
+	disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_phaseshift_input')
+
+	try:
+		desired_phase_shift = float(desired_phase_shift)
+	except:
+		st.markdown(':red[desired phase shift needs to be input as a float]')
+
+	diam_lam_o_D = st.text_input(r'phase mask diameter ($\lambda/D$)', value=1, label_visibility=st.session_state.visibility,\
+	disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_FPMdiam_input')
+
+	try:
+		diam_lam_o_D = float(diam_lam_o_D)
+	except:
+		st.markdown(':red[phase mask diameter needs to be input as a float]')
+
 with col4:
-    st.markdown('DM setup')
-    
-    N_act = st.text_input("Number of actuators (x)", value=12, label_visibility=st.session_state.visibility,\
-    disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_Nact_input')   
+	st.markdown('DM setup')
 
-    try:
-        N_act = int(N_act)
-    except:
-        st.markdown(':red[number of actuators in x needs to be input as an int > 0]')
-            
-    surface_type = st.selectbox('DM surface type',['continuous','segmented'], index=0, key='OL_dmsurfaceType_input')
-    
-           
+	N_act = st.text_input("Number of actuators (x)", value=12, label_visibility=st.session_state.visibility,\
+	disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_Nact_input')   
+
+	try:
+		N_act = int(N_act)
+	except:
+		st.markdown(':red[number of actuators in x needs to be input as an int > 0]')
+		
+	surface_type = st.selectbox('DM surface type',['continuous','segmented'], index=0, key='OL_dmsurfaceType_input')
+
+	   
 with col5:
-    st.markdown('detector setup')
+	st.markdown('detector setup')
 
-    npix_det = st.text_input("Nx pixels on detector", value=12, label_visibility=st.session_state.visibility,\
-    disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_npixdet_input')
-    
-    try:
-        npix_det = int(npix_det)
-    except:
-        st.markdown(':red[Nx pixels on detector needs to be input as an int > 0]')
-            
-    DIT = st.text_input("detector integration time (s)", value=0.001, label_visibility=st.session_state.visibility,\
-    disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_dit_input')
-    
-    try:
-        DIT = float(DIT)
-    except:
-        st.markdown(':red[detector integration time needs to be input as a float > 0]')
-        
-    ron = st.text_input("read out noise (e-)", value=1, label_visibility=st.session_state.visibility,\
-    disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_ron_input')
-    
-    try:
-        ron = float(ron)
-    except:
-        st.markdown(':red[read out noise needs to be input as a float > 0]')
-        
-    qe = st.text_input("quantum efficiency", value=1, label_visibility=st.session_state.visibility,\
-    disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_qe_input')
-    
-    try:
-        qe = float(qe)
-    except:
-        st.markdown(':red[quantum efficiency needs to be input as a float between 0-1]')
-    
+	npix_det = st.text_input("Nx pixels on detector", value=12, label_visibility=st.session_state.visibility,\
+	disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_npixdet_input')
+
+	try:
+		npix_det = int(npix_det)
+	except:
+		st.markdown(':red[Nx pixels on detector needs to be input as an int > 0]')
+		
+	DIT = st.text_input("detector integration time (s)", value=0.001, label_visibility=st.session_state.visibility,\
+	disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_dit_input')
+
+	try:
+		DIT = float(DIT)
+	except:
+		st.markdown(':red[detector integration time needs to be input as a float > 0]')
+	
+	ron = st.text_input("read out noise (e-)", value=1, label_visibility=st.session_state.visibility,\
+	disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_ron_input')
+
+	try:
+		ron = float(ron)
+	except:
+		st.markdown(':red[read out noise needs to be input as a float > 0]')
+	
+	qe = st.text_input("quantum efficiency", value=1, label_visibility=st.session_state.visibility,\
+	disabled=st.session_state.disabled, placeholder=st.session_state.placeholder,key='OL_qe_input')
+
+	try:
+		qe = float(qe)
+	except:
+		st.markdown(':red[quantum efficiency needs to be input as a float between 0-1]')
+
 
 epsilon = st.slider('phase scaling', 0.0, 10.0, 0.1, key='OL_epsilon_input')
 

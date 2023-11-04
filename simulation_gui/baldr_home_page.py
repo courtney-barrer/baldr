@@ -1,4 +1,4 @@
-import streamlit as st
+"""import streamlit as st
 import numpy as np 
 import matplotlib.pyplot as plt
 import plotly.express as px
@@ -8,7 +8,18 @@ import pyzelda.utils.zernike as zernike
 import os 
 os.chdir('/Users/bcourtne/Documents/ANU_PHD2/baldr')
 from functions import baldr_functions_2 as baldr
+"""
 
+import streamlit as st
+import json 
+import os 
+st.markdown('Welcome to a ZWFS simulator for Baldr - ')
+
+
+
+
+
+"""
 
 #B_over_A = st.slider('B/A', min_value=0, max_value=100, value=1, step=1, format=None, key='B_over_A_for_interactive_plot')
 
@@ -108,6 +119,10 @@ fig.layout.yaxis.zeroline = False
 fig.layout.yaxis.showgrid = False
 
 st.plotly_chart(fig)
+
+"""
+
+
     
 """
 import streamlit as st

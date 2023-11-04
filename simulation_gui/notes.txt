@@ -1,0 +1,13 @@
+Configuration files are json, there are the following types of base configuration files corresponding to
+-tel config : telescope + grid parameters
+-phasemask config : phasemask parameters
+-DM config : DM parameters
+-detector config : detector parameters
+-calibration source config : calibration source parameter
+
+With 
+tel config + phasemask config + DM config + detector config 
+We create a mode configuration file. Then with a configured calibration source, and specified modal basis + number of controlled modes we can create an interaction matrix which is appended to a mode configuration file to create a ZWFS configuration file. This can create a python ZWFS object which we can use to run simulations. 
+
+
+

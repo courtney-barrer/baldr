@@ -1,0 +1,1 @@
+{"on-axis_transparency": 1.0, "off-axis_transparency": 1.0, "on-axis_glass": "sio2", "off-axis_glass": "sio2", "on-axis phasemask depth": 21.0, "off-axis phasemask depth": 20.6, "fratio": 21.0, "phasemask_diameter": 1.0, "N_samples_across_phase_shift_region": 10, "nx_size_focal_plane": 240}
