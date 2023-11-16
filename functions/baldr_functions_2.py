@@ -819,12 +819,104 @@ class signal():
         
         return( phi )  
         """
+
+class ZWFS():
+    def __init__(self,mode_dict):
         
-     
+       	# eventually I should make a ZWFS object that holds the configuration files etc 
+       	self.pup = pick_pupil(pupil_geometry=mode_dict['telescope']['pup_geometry'] , dim=mode_dict['telescope']['pupil_nx_pixels'], diameter = mode_dict['telescope']['telescope_diameter_pixels'])
+       	
+       	self.dm = DM(surface=np.zeros([mode_dict['DM']['N_act'],mode_dict['DM']['N_act']]), gain=mode_dict['DM']['m/V'] ,\
+       		angle=mode_dict['DM']['angle'],surface_type = mode_dict['DM']['surface_type']) 
+       	
+       	self.FPM = zernike_phase_mask(A=mode_dict['phasemask']['off-axis_transparency'],B=mode_dict['phasemask']['on-axis_transparency'],\
+       		phase_shift_diameter=mode_dict['phasemask']['phasemask_diameter'],f_ratio=mode_dict['phasemask']['fratio'],\
+       		d_on=mode_dict['phasemask']['on-axis phasemask depth'],d_off=mode_dict['phasemask']['off-axis phasemask depth'],\
+       		glass_on=mode_dict['phasemask']['on-axis_glass'],glass_off=mode_dict['phasemask']['off-axis_glass'])
+       	
+       	# -------- NOTE WE USE BY DEFAULT 10 WAVELENGTH BINS ! --------------
+       	wvls = np.linspace( mode_dict['detector']['det_wvl_min'] ,  mode_dict['detector']['det_wvl_max'], 10 ) 
+       	QE = mode_dict['detector']['quantum_efficiency']
+        self.det = detector(npix=mode_dict['detector']['detector_npix'], pix_scale = mode_dict['detector']['pix_scale_det'] , DIT= mode_dict['detector']['DIT'], ron=mode_dict['detector']['ron'], QE={w:QE for w in wvls})
+       	
+        self.mode = mode_dict
+        
+        self.control_variables = {} # to be filled 
+
+
+    def setup_control_parameters( self, calibration_source_config_dict, N_controlled_modes, modal_basis='zernike', pokeAmp = 50e-9 , label='control_1'):
+
+        self.control[label] = {}
+
+        # TO DO
+        # NOW I HAVE TO CREATE DM AND DET FROM CALIBRATION SOURCE DICT (AND OTHER PARAMETERS )
+        """
+        cmd = np.zeros( self.dm.surface.reshape(-1).shape ) 
+        self.dm.update_shape(cmd) #zero dm first
+        
+        calibration_field = 
+        
+        # get the reference signal from calibration field with phase mask in
+        sig_on_ref = detection_chain(calibration_field, self.dm, self.FPM, self.det)
+        #sig_on_ref.signal = np.mean( [baldr.detection_chain(calibration_field, dm, FPM, det).signal for _ in range(10)]  , axis=0) # average over a few 
+        
+        # estimate #photons of in calibration field by removing phase mask (zero phase shift)   
+        sig_off_ref = detection_chain(calibration_field, dm, FPM_cal, det)
+        #sig_off_ref.signal = np.mean( [baldr.detection_chain(calibration_field, dm, FPM_cal, det).signal for _ in range(10)]  , axis=0) # average over a few 
+        Nph_cal = np.sum(sig_off_ref.signal)
+        
+        # Put modes on DM and measure signals from calibration field
+        pokeAmp = 50e-9
+        
+        # CREATE THE CONTROL BASIS FOR OUR DM
+        control_basis = baldr.create_control_basis(dm=dm, N_controlled_modes=N_controlled_modes, basis_modes='zernike')
+        
+        # BUILD OUR INTERACTION AND CONTROL MATRICESFROM THE CALIBRATION SOURCE AND OUR ZWFS SETUP
+        IM_modal, pinv_IM_modal = build_IM(calibration_field=calibration_field, dm=self.dm, FPM=self.FPM, det=self.det, control_basis=control_basis, pokeAmp=pokeAmp)
+        
+        self.control[label]['calsource_config_dict'] = calibration_source_config_dict
+        
+        self.control_variables[label]['IM']= IM_modal
+        self.control_variables[label]['CM'] = pinv_IM_modal
+        self.control_variables[label]['control_basis'] = control_basis
+        self.control_variables[label]['pokeAmp'] = pokeAmp
+        self.control_variables[label]['N_controlled_modes'] = N_controlled_modes
+        self.control_variables[label]['Nph_cal'] = Nph_cal
+        self.control_variables[label]['sig_on_ref'] = sig_on_ref.signal
+        self.control_variables[label]['sig_off_ref'] = sig_off_ref.signal
+        """
+        
 def detection_chain(input_field, dm, FPM, det, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True):
+    """
+
     # apply DM correction 
     # Pass through ZWFS (phase mask) onto back pupil
-    # detect it on a detector to get a signal 
+    # detect it on a detector to get a signal     
+
+    Parameters
+    ----------
+    input_field : TYPE:  field object from baldr module
+        DESCRIPTION.
+    dm : TYPE: DM object from baldr module
+        DESCRIPTION.
+    FPM : TYPE zernike_phase_mask object from baldr module
+        DESCRIPTION.
+    det : TYPE detector object from baldr module
+        DESCRIPTION.
+    include_shotnoise : TYPE:boolean, optional
+        DESCRIPTION. The default is True.
+    ph_per_s_per_m2_per_nm : TYPE:boolean, optional
+        DESCRIPTION. The default is True.
+    grids_aligned : TYPE:boolean, optional
+        DESCRIPTION. The default is True.
+
+    Returns
+    -------
+    signal from the detector
+
+    """
+    
+
     input_field_dm = input_field.applyDM(dm) # apply DM phase shifts
     output_field = FPM.get_output_field( input_field_dm, wvl_lims=[0,100], nx_size_focal_plane = None, dx_focal_plane = None, keep_intermediate_products=False )
     output_field.define_pupil_grid(dx=input_field.dx, D_pix=input_field.D_pix)
@@ -835,6 +927,121 @@ def detection_chain(input_field, dm, FPM, det, include_shotnoise=True, ph_per_s_
 
 
 
+def create_control_basis(dm, N_controlled_modes, basis_modes='zernike'):
+    """
+    
+
+    Parameters
+    ----------
+    dm : TYPE dm object from baldr module
+        DESCRIPTION. what DM do we want our control basis to be built for?
+    N_controlled_modes : TYPE : int
+        DESCRIPTION. How many modes to consider in our control basis 
+    basis_modes : TYPE, optional
+        DESCRIPTION. The default is 'zernike'. The other option is 'KL'
+
+    Raises
+    ------
+    TypeError
+        DESCRIPTION.
+
+    Returns
+    -------
+    control_basis
+
+    """
+    
+    # Zernike control basis (used to calculate KL modes if required)
+    zernike_control_basis  = [np.nan_to_num(b) for b in zernike.zernike_basis(nterms=N_controlled_modes, npix=dm.N_act[0]) ]
+    
+    
+    if basis_modes == 'zernike':
+        control_basis = zernike_control_basis
+    
+    
+    elif basis_modes == 'KL':
+        # want to get change of basis matrix to go from Zernike to KL modes 
+        # do this by by diaonalizing covariance matrix of Zernike basis  with SVD , since Hermitian Vt=U^-1 , therefore our change of basis vectors! 
+        b0 = np.array( [np.nan_to_num(b) for b in zernike_control_basis] )
+        cov0 = np.cov( b0.reshape(len(b0),-1) )  # have to be careful how nan to zero replacements are made since cov should be calculated only where Zernike basis is valid , ie not nan
+        KL_B , S,  iKL_B = np.linalg.svd( cov0 )
+        # take a look plt.figure(): plt.imshow( (b0.T @ KL_B[:,:] ).T [2])
+    
+        control_basis  = (b0.T @ KL_B[:,:] ).T  #[b.T @ KL_B[:,:] for b in b0 ]
+        
+    else:
+        raise TypeError('basis_modes needs to be a string with either "zernike" or "KL"')
+        
+    return(control_basis)
+
+
+def build_IM(calibration_field, dm, FPM, det, control_basis, pokeAmp=50e-9):
+    """
+    
+
+    Parameters
+    ----------
+    calibration_field : TYPE field object from baldr module
+        DESCRIPTION. a field coming from a calibration source with (ideally) zero aberrations 
+    dm : TYPE : dm object from baldr module
+        DESCRIPTION.
+    FPM : TYPE :zernike_phase_mask object from baldr module
+        DESCRIPTION.
+    det : TYPE : detector object from baldr module
+        DESCRIPTION.
+    control_basis : TYPE : list
+        DESCRIPTION. list of the control bases to build the interaction matrix with. Note basis needs to have same shape as DM
+    pokeAmp : TYPE : float, optional
+        DESCRIPTION. what amplitde (m) should we poke the DM with? The default is 50e-9 meters.
+
+    Returns
+    -------
+    interaction_matrix, control_matrix
+
+    """
+    
+    #define calibrator phase mask with zero phase shift
+    FPM_cal = zernike_phase_mask(A=FPM.A,B=FPM.B,phase_shift_diameter=FPM.phase_shift_diameter,\
+                                       f_ratio=FPM.f_ratio,d_on=FPM.d_on,d_off=FPM.d_on,glass_on=FPM.glass_on,glass_off=FPM.glass_off)
+    ## ==== CREATE INTERACTION MATRIX
+    # modal IM  (modal)  
+    cmd = np.zeros( dm.surface.reshape(-1).shape ) 
+    dm.update_shape(cmd) #zero dm first
+    
+    
+    # get the reference signal from calibration field with phase mask in
+    sig_on_ref = detection_chain(calibration_field, dm, FPM, det)
+    sig_on_ref.signal = np.mean( [detection_chain(calibration_field, dm, FPM, det).signal for _ in range(10)]  , axis=0) # average over a few 
+    
+    # estimate #photons of in calibration field by removing phase mask (zero phase shift)   
+    sig_off_ref = detection_chain(calibration_field, dm, FPM_cal, det)
+    sig_off_ref.signal = np.mean( [detection_chain(calibration_field, dm, FPM_cal, det).signal for _ in range(10)]  , axis=0) # average over a few 
+    Nph_cal = np.sum(sig_off_ref.signal)
+    
+    cmd = np.zeros( dm.surface.reshape(-1).shape ) 
+    dm.update_shape(cmd) #zero dm first
+    
+    modal_signal_list = []
+    for b in control_basis:
+        cmd = pokeAmp * b.reshape(1,-1)[0]
+        
+        dm.update_shape(cmd)
+    
+        sig = detection_chain(calibration_field, dm, FPM, det)
+        #average over a few 
+        sig.signal = np.mean( [detection_chain(calibration_field, dm, FPM, det).signal for _ in range(10)] ,axis=0)
+        modal_signal_list.append( sig ) 
+    
+    
+    # Now create our iteraction matrix by filling rows with meta intensities (as defined in OLIVIER FAUVARQUE 2016)
+    interaction_matrix = []
+    for s in modal_signal_list:
+        interaction_matrix.append( list( ( 1/Nph_cal * (s.signal - sig_on_ref.signal) ).reshape(-1) )  )   # filter out modes that are outside pupil with mask
+
+    # calculate control matrix (inverse of interaction matrix )
+    control_matrix = np.linalg.pinv(interaction_matrix)
+    
+    return(interaction_matrix, control_matrix )
 def star2photons(band, mag, airmass=1, k = 0.18, ph_m2_s_nm = True):
     """
     # for given photometric band, magnitude, airmass, extinction return Nph/m2/s/wvl     
@@ -987,13 +1194,15 @@ def nglass(l, glass='sio2'):
     elif (glass == 'epoclad'):
         n = 1.560 + 0.0073/l**2 + 0.00038/l**4
         return n
-
+    elif (glass == 'noa61'):
+        n = 1.5375 + 8290.45/(l*1e-3)**2 - 2.11046e8/(l*1e-3)**4 # at 25C (https://www.norlandprod.com/literature/61tds.pdf)
+        return(n)
     else:
         print("ERROR: Unknown glass {0:s}".format(glass))
         raise UserWarning
     n = np.ones(nl)
     for i in range(len(B)):
-            n += B[i]*l**2/(l**2 - C[i])
+        n += B[i]*l**2/(l**2 - C[i])
     return np.sqrt(n)
 
 
