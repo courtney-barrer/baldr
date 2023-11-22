@@ -835,8 +835,11 @@ class ZWFS():
        		glass_on=mode_dict['phasemask']['on-axis_glass'],glass_off=mode_dict['phasemask']['off-axis_glass'])
        	
        	# -------- NOTE WE USE BY DEFAULT 10 WAVELENGTH BINS ! --------------
-       	wvls = np.linspace( mode_dict['detector']['det_wvl_min'] ,  mode_dict['detector']['det_wvl_max'], 10 ) 
+       	wvls = np.linspace( mode_dict['detector']['det_wvl_min'] ,  mode_dict['detector']['det_wvl_max'], mode_dict['detector']['number_wvl_bins']) 
        	QE = mode_dict['detector']['quantum_efficiency']
+        
+        self.wvls = wvls 
+        
         self.det = detector(npix=mode_dict['detector']['detector_npix'], pix_scale = mode_dict['detector']['pix_scale_det'] , DIT= mode_dict['detector']['DIT'], ron=mode_dict['detector']['ron'], QE={w:QE for w in wvls})
        	
         self.mode = mode_dict
@@ -926,7 +929,32 @@ def detection_chain(input_field, dm, FPM, det, include_shotnoise=True, ph_per_s_
     return( sig )
 
 
+def create_calibration_field_for_ZWFS( calibration_source_config_dict, ZWFS):
+	
+	h = 6.62607015e-34 #Planks constant [J/Hz]
+	c = 299792458 #speed of light [m/s]
+	
+	wvls = ZWFS.wvls # um 
+	
+	dx = ZWFS.mode['telescope']['telescope_diameter'] / ZWFS.mode['telescope']['telescope_diameter_pixels']
+	
+	pup = pick_pupil(pupil_geometry=calibration_source_config_dict['calsource_pup_geometry'] , dim=ZWFS.mode['telescope']['pupil_nx_pixels'], diameter = ZWFS.mode['telescope']['telescope_diameter_pixels'])
+	
+	ph_m2_s_nm = calibration_source_config_dict['flux'] * np.mean(wvls * 1e-6) / (h*c) / (1e3 * (wvls[-1] - wvls[0])) # number of photons per second per meter square per nm
+	
+	BB = blackbody(wvls * 1e-6, calibration_source_config_dict['temperature']) # create blackbody spectrum based on calibration source temperature 
+	
+	calibration_spectrum = ph_m2_s_nm * BB / ( np.sum( BB ) * np.diff(wvls*1e-6)[0] ) # normalize Blackbody spectrum so integral over wavelengths = 1, then multiply by Nph_s_m2_nm... check int( calibration_spectrum ,dwvl) = Nph_s_m2?
 
+	calibration_phases = [np.nan_to_num(pup) for w in wvls]
+	calibration_fluxes = [n * pup  for n in calibration_spectrum] # ph_m2_s_nm
+
+	calibration_field = field( phases = calibration_phases, fluxes = calibration_fluxes  , wvls=wvls )
+	calibration_field.define_pupil_grid( dx = dx, D_pix = ZWFS.mode['telescope']['telescope_diameter_pixels'] ) # considering calibration source on telescope pupil grid of ZWFS
+
+	return( calibration_field )
+	
+	
 def create_control_basis(dm, N_controlled_modes, basis_modes='zernike'):
     """
     
@@ -1042,6 +1070,8 @@ def build_IM(calibration_field, dm, FPM, det, control_basis, pokeAmp=50e-9):
     control_matrix = np.linalg.pinv(interaction_matrix)
     
     return(interaction_matrix, control_matrix )
+
+
 def star2photons(band, mag, airmass=1, k = 0.18, ph_m2_s_nm = True):
     """
     # for given photometric band, magnitude, airmass, extinction return Nph/m2/s/wvl     

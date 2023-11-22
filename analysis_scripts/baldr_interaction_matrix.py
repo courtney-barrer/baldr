@@ -17,10 +17,23 @@ import scipy
 os.chdir('/Users/bcourtne/Documents/ANU_PHD2/baldr')
 
 from functions import baldr_functions_2 as baldr
+from functions import data_structure_functions as config
 
     
+# testing the new configuration formating 
+tel_config =  config.init_telescope_config_dict(use_default_values = True)
+phasemask_config = config.init_phasemask_config_dict(use_default_values = True) 
+DM_config = config.init_DM_config_dict(use_default_values = True) 
+detector_config = config.init_detector_config_dict(use_default_values = True)
 
-    
+mode_dict = config.create_mode_config_dict( tel_config, phasemask_config, DM_config, detector_config)
+
+zwfs = baldr.ZWFS(mode_dict)
+
+calibration_source_config_dict = config.init_calibration_source_config_dict(use_default_values = True)
+
+calibration_field = baldr.create_calibration_field_for_ZWFS( calibration_source_config_dict, zwfs)
+
 
 def plot_ao_correction_process(phase_before, phase_reco, phase_after , title_list =None):
     """ everything should be input as  micrometer OPD """
