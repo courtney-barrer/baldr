@@ -632,7 +632,6 @@ class detector:
         # have to deal with field wavelengths (look at field class structure), detector wavelengths defined in self.qe dict
         # IMPORTANT TO HAVE FAST OPTION WHEN GRIDS ARE SET PROPERLY FROM THE START TO AVOID 2D INTERPOLATION!!
         
-        
         self.det = np.zeros([ self.npix ,  self.npix ] )
         
         #wavelengths
@@ -640,28 +639,32 @@ class detector:
         field_wvls = np.array( field.wvl ) # m
         
         # to deal with case len(wvl)=1
-        if not set(field_wvls).issubset(set(det_wvl)): # if wvls defined in field object not defined in detector (quantum efficiency) then we interpolate them
-            self.interpolate_QE_to_field_wvls(self, field)
+        if set(field_wvls) != set(det_wvl): # if wvls defined in field object not defined in detector (quantum efficiency) then we interpolate them           
+            self.interpolate_QE_to_field_wvls( field )  #before it was self.interpolate_QE_to_field_wvls( self, field )
 
             
-        if field.nx_size * field.dx > self.npix * self.pix_scale:
+        if abs( (field.nx_size * field.dx - self.npix * self.pix_scale)/ (field.nx_size * field.dx))  > 0.01: # if discrepency is more than 1%
             print('WARNING: some of the input field does not fall on the detector')
         
         if grids_aligned: 
             
-            pw = int(self.pix_scale // field.dx) # how many field grid points fit into a single detector pixel assuming same origin
+            pw = round(self.pix_scale / field.dx) # how many field grid points fit into a single detector pixel assuming same origin
         
             for n in range(self.det.shape[0]):
                 for m in range(self.det.shape[1]):
                     if ph_per_s_per_m2_per_nm:
+                        #flux per wvl bin in each pixel (photons per nm )
+                        P_wvl = np.array( [self.DIT * self.qe[w] * np.sum( field.flux[w][pw*n:pw*(n+1), pw*m:pw*(m+1)] * field.dx**2 ) for w in field_wvls] )
+                        P = integrate( P_wvl  , field_wvls * 1e9)  # total #photons
                         if include_shotnoise:
-                            P_wvl = np.array( [self.DIT * self.qe[w] * np.sum( field.flux[w][pw*n:pw*(n+1), pw*m:pw*(m+1)] * field.dx**2 ) for w in field_wvls] )
-                            self.det[n,m] =  poisson.rvs( integrate( P_wvl  , field_wvls * 1e9) ) # draw from poission distribution with mean = np.trapz( P_wvl  , field_wvls)
+                            if P < 1e10: # draw from poission
+                                self.det[n,m] =  poisson.rvs( P ) # draw from poission distribution with mean = np.trapz( P_wvl  , field_wvls)
+                            else: #draw from normal (central limit theorem)
+                                self.det[n,m] =  np.random.normal(loc=P, scale=np.sqrt(P), size=None)
                             #note 1e9 because field_wvls should be m and flux should be ph_per_s_per_m2_per_nm
                         else:
-                            # integrate to get number of photons 
-                            P_wvl = np.array( [self.DIT * self.qe[w] * np.sum( field.flux[w][pw*n:pw*(n+1), pw*m:pw*(m+1)] * field.dx**2 ) for w in field_wvls] )
-                            self.det[n,m] =  integrate( P_wvl  , field_wvls * 1e9) # 
+                            
+                            self.det[n,m] = P
                             #DIT * self.qe[wvl] * np.sum( flux[pw*n:pw*(n+1), pw*m:pw*(m+1)] * field.dx**2 ) 
                     else:
                         raise TypeError('make sure flux units are ph_per_s_per_m2_per_nm othersie integrals will be wrong\n\
@@ -823,24 +826,31 @@ class signal():
 class ZWFS():
     def __init__(self,mode_dict):
         
-       	# eventually I should make a ZWFS object that holds the configuration files etc 
-       	self.pup = pick_pupil(pupil_geometry=mode_dict['telescope']['pup_geometry'] , dim=mode_dict['telescope']['pupil_nx_pixels'], diameter = mode_dict['telescope']['telescope_diameter_pixels'])
+               	
+       	wvls_um = np.linspace( mode_dict['detector']['det_wvl_min'] ,  mode_dict['detector']['det_wvl_max'], mode_dict['detector']['number_wvl_bins'])  #um
+       	QE = mode_dict['detector']['quantum_efficiency']
+           
+
+        self.wvls = wvls_um * 1e-6 # m
+       	
+        self.pup = pick_pupil(pupil_geometry=mode_dict['telescope']['pup_geometry'] , dim=mode_dict['telescope']['pupil_nx_pixels'], diameter = mode_dict['telescope']['telescope_diameter_pixels'])
        	
        	self.dm = DM(surface=np.zeros([mode_dict['DM']['N_act'],mode_dict['DM']['N_act']]), gain=mode_dict['DM']['m/V'] ,\
        		angle=mode_dict['DM']['angle'],surface_type = mode_dict['DM']['surface_type']) 
        	
        	self.FPM = zernike_phase_mask(A=mode_dict['phasemask']['off-axis_transparency'],B=mode_dict['phasemask']['on-axis_transparency'],\
-       		phase_shift_diameter=mode_dict['phasemask']['phasemask_diameter'],f_ratio=mode_dict['phasemask']['fratio'],\
+       		phase_shift_diameter=mode_dict['phasemask']['phasemask_diameter'], f_ratio=mode_dict['phasemask']['fratio'],\
        		d_on=mode_dict['phasemask']['on-axis phasemask depth'],d_off=mode_dict['phasemask']['off-axis phasemask depth'],\
        		glass_on=mode_dict['phasemask']['on-axis_glass'],glass_off=mode_dict['phasemask']['off-axis_glass'])
-       	
-       	# -------- NOTE WE USE BY DEFAULT 10 WAVELENGTH BINS ! --------------
-       	wvls = np.linspace( mode_dict['detector']['det_wvl_min'] ,  mode_dict['detector']['det_wvl_max'], mode_dict['detector']['number_wvl_bins']) 
-       	QE = mode_dict['detector']['quantum_efficiency']
-        
-        self.wvls = wvls 
-        
-        self.det = detector(npix=mode_dict['detector']['detector_npix'], pix_scale = mode_dict['detector']['pix_scale_det'] , DIT= mode_dict['detector']['DIT'], ron=mode_dict['detector']['ron'], QE={w:QE for w in wvls})
+            
+        # FPM when no phase shift is applied    (e.g.   d_on = d_off)
+        self.FPM_off = zernike_phase_mask(A=mode_dict['phasemask']['off-axis_transparency'],B=mode_dict['phasemask']['on-axis_transparency'],\
+       		phase_shift_diameter=mode_dict['phasemask']['phasemask_diameter'], f_ratio=mode_dict['phasemask']['fratio'],\
+       		d_on=mode_dict['phasemask']['on-axis phasemask depth'],d_off=mode_dict['phasemask']['on-axis phasemask depth'],\
+       		glass_on=mode_dict['phasemask']['on-axis_glass'],glass_off=mode_dict['phasemask']['off-axis_glass'])
+            
+
+        self.det = detector(npix=mode_dict['detector']['detector_npix'], pix_scale = mode_dict['detector']['pix_scale_det'] , DIT= mode_dict['detector']['DIT'], ron=mode_dict['detector']['ron'], QE={w:QE for w in self.wvls})
        	
         self.mode = mode_dict
         
@@ -849,7 +859,31 @@ class ZWFS():
 
     def setup_control_parameters( self, calibration_source_config_dict, N_controlled_modes, modal_basis='zernike', pokeAmp = 50e-9 , label='control_1'):
 
-        self.control[label] = {}
+        self.control_variables[label] = {}
+        
+        calibration_field = create_calibration_field_for_ZWFS(self, calibration_source_config_dict)
+        
+        control_basis = create_control_basis(self.dm, N_controlled_modes=N_controlled_modes, basis_modes=modal_basis)
+        
+        interaction_matrix, control_matrix = build_IM(calibration_field, self.dm, self.FPM, self.det, control_basis, pokeAmp=pokeAmp)
+        
+        sig_on = detection_chain(calibration_field, self.dm, self.FPM, self.det)
+        sig_off = detection_chain(calibration_field, self.dm, self.FPM_off, self.det)
+        
+        Nph_cal = np.sum(sig_off.signal)
+        
+        self.control_variables[label]['calsource_config_dict'] = calibration_source_config_dict
+        
+        self.control_variables[label]['calibration_field'] = calibration_field
+        self.control_variables[label]['IM'] = interaction_matrix
+        self.control_variables[label]['CM'] = control_matrix
+        self.control_variables[label]['control_basis'] = control_basis
+        self.control_variables[label]['pokeAmp'] = pokeAmp
+        self.control_variables[label]['N_controlled_modes'] = N_controlled_modes
+        self.control_variables[label]['Nph_cal'] = Nph_cal
+        self.control_variables[label]['sig_on_ref'] = sig_on.signal
+        self.control_variables[label]['sig_off_ref'] = sig_off.signal
+        
 
         # TO DO
         # NOW I HAVE TO CREATE DM AND DET FROM CALIBRATION SOURCE DICT (AND OTHER PARAMETERS )
@@ -889,9 +923,52 @@ class ZWFS():
         self.control_variables[label]['sig_off_ref'] = sig_off_ref.signal
         """
         
-def detection_chain(input_field, dm, FPM, det, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True):
-    """
+    def detection_chain(self, input_field, FPM_on=True, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True):
+        """
+        # apply DM correction 
+        # Pass through ZWFS (phase mask) onto back pupil
+        # detect it on a detector to get a signal     
+    
+        Parameters
+        ----------
+        input_field : TYPE:  field object from baldr module
+            DESCRIPTION.
+        dm : TYPE: DM object from baldr module
+            DESCRIPTION.
+        FPM : TYPE zernike_phase_mask object from baldr module
+            DESCRIPTION.
+        det : TYPE detector object from baldr module
+            DESCRIPTION.
+        include_shotnoise : TYPE:boolean, optional
+            DESCRIPTION. The default is True.
+        ph_per_s_per_m2_per_nm : TYPE:boolean, optional
+            DESCRIPTION. The default is True.
+        grids_aligned : TYPE:boolean, optional
+            DESCRIPTION. The default is True.
+    
+        Returns
+        -------
+        signal from the detector
+    
+        """
+        
 
+        # define our focal plane pixel scale by how many pixels we want across the phase mask region
+        dx_focal_plane = self.mode['phasemask']['phasemask_diameter'] / self.mode['phasemask']['N_samples_across_phase_shift_region']  #m/pixel
+
+        if FPM_on:
+            sig = detection_chain(input_field, self.dm, self.FPM, self.det, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True, nx_size_focal_plane = self.mode['phasemask']['nx_size_focal_plane'], dx_focal_plane=dx_focal_plane)
+        else: # we use a non phase shifting mask
+            sig = detection_chain(input_field, self.dm, self.FPM_off, self.det, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True, nx_size_focal_plane = self.mode['phasemask']['nx_size_focal_plane'], dx_focal_plane=dx_focal_plane)
+        
+        return( sig )
+    
+        
+    
+    
+def detection_chain(input_field, dm, FPM, det, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True, nx_size_focal_plane = None, dx_focal_plane=None):
+    """
+    This is the old one - we now do this as a method within ZWFS object
     # apply DM correction 
     # Pass through ZWFS (phase mask) onto back pupil
     # detect it on a detector to get a signal     
@@ -921,7 +998,7 @@ def detection_chain(input_field, dm, FPM, det, include_shotnoise=True, ph_per_s_
     
 
     input_field_dm = input_field.applyDM(dm) # apply DM phase shifts
-    output_field = FPM.get_output_field( input_field_dm, wvl_lims=[0,100], nx_size_focal_plane = None, dx_focal_plane = None, keep_intermediate_products=False )
+    output_field = FPM.get_output_field( input_field_dm,  nx_size_focal_plane = nx_size_focal_plane, dx_focal_plane = dx_focal_plane, keep_intermediate_products=False )
     output_field.define_pupil_grid(dx=input_field.dx, D_pix=input_field.D_pix)
     
     sig = det.detect_field( output_field, include_shotnoise=include_shotnoise, ph_per_s_per_m2_per_nm=ph_per_s_per_m2_per_nm, grids_aligned=grids_aligned)
@@ -929,27 +1006,28 @@ def detection_chain(input_field, dm, FPM, det, include_shotnoise=True, ph_per_s_
     return( sig )
 
 
-def create_calibration_field_for_ZWFS( calibration_source_config_dict, ZWFS):
+def create_calibration_field_for_ZWFS(ZWFS, calibration_source_config_dict):
 	
 	h = 6.62607015e-34 #Planks constant [J/Hz]
 	c = 299792458 #speed of light [m/s]
 	
-	wvls = ZWFS.wvls # um 
+	wvls = ZWFS.wvls # m 
 	
 	dx = ZWFS.mode['telescope']['telescope_diameter'] / ZWFS.mode['telescope']['telescope_diameter_pixels']
 	
 	pup = pick_pupil(pupil_geometry=calibration_source_config_dict['calsource_pup_geometry'] , dim=ZWFS.mode['telescope']['pupil_nx_pixels'], diameter = ZWFS.mode['telescope']['telescope_diameter_pixels'])
 	
-	ph_m2_s_nm = calibration_source_config_dict['flux'] * np.mean(wvls * 1e-6) / (h*c) / (1e3 * (wvls[-1] - wvls[0])) # number of photons per second per meter square per nm
+	ph_m2_s_nm = calibration_source_config_dict['flux'] * np.mean(wvls ) / (h*c) / (1e9 * (wvls[-1] - wvls[0])) # number of photons per second per meter square per nm
 	
-	BB = blackbody(wvls * 1e-6, calibration_source_config_dict['temperature']) # create blackbody spectrum based on calibration source temperature 
+    # important : blackboady wavls nare in um !
+	BB = blackbody(wvls * 1e6, calibration_source_config_dict['temperature']).value # W/m2/micron/arcsec2 create blackbody spectrum based on calibration source temperature 
 	
-	calibration_spectrum = ph_m2_s_nm * BB / ( np.sum( BB ) * np.diff(wvls*1e-6)[0] ) # normalize Blackbody spectrum so integral over wavelengths = 1, then multiply by Nph_s_m2_nm... check int( calibration_spectrum ,dwvl) = Nph_s_m2?
+	calibration_spectrum = ph_m2_s_nm * BB / ( np.sum( BB ) * np.diff( wvls*1e-6)[0] ) # normalize Blackbody spectrum so integral over wavelengths = 1, then multiply by Nph_s_m2_nm... check int( calibration_spectrum ,dwvl) = Nph_s_m2?
 
 	calibration_phases = [np.nan_to_num(pup) for w in wvls]
 	calibration_fluxes = [n * pup  for n in calibration_spectrum] # ph_m2_s_nm
 
-	calibration_field = field( phases = calibration_phases, fluxes = calibration_fluxes  , wvls=wvls )
+	calibration_field = field( phases = calibration_phases, fluxes = calibration_fluxes  , wvls =  wvls )
 	calibration_field.define_pupil_grid( dx = dx, D_pix = ZWFS.mode['telescope']['telescope_diameter_pixels'] ) # considering calibration source on telescope pupil grid of ZWFS
 
 	return( calibration_field )

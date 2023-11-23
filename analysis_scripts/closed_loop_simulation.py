@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
+Created on Thu Nov 23 10:38:07 2023
+
+@author: bcourtne
+"""
+
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
 Created on Wed Aug 16 22:40:50 2023
 
 @author: bcourtne
@@ -12,6 +20,7 @@ import os
 import pyzelda.utils.zernike as zernike
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import scipy 
+import copy
 
 #import zelda
 os.chdir('/Users/bcourtne/Documents/ANU_PHD2/baldr')
@@ -26,17 +35,148 @@ phasemask_config = config.init_phasemask_config_dict(use_default_values = True)
 DM_config = config.init_DM_config_dict(use_default_values = True) 
 detector_config = config.init_detector_config_dict(use_default_values = True)
 
+#phasemask_OFF_config = copy.copy(phasemask_config)
+#phasemask_OFF_config['on-axis phasemask depth'] = phasemask_OFF_config['off-axis phasemask depth']
+
 mode_dict = config.create_mode_config_dict( tel_config, phasemask_config, DM_config, detector_config)
+#mode_dict_OFF = config.create_mode_config_dict( tel_config, phasemask_OFF_config, DM_config, detector_config)
 
 zwfs = baldr.ZWFS(mode_dict)
+#zwfs_OFF = baldr.ZWFS(mode_dict_OFF)
 
 calibration_source_config_dict = config.init_calibration_source_config_dict(use_default_values = True)
+#calibration_field = baldr.create_calibration_field_for_ZWFS( calibration_source_config_dict, zwfs)
 
-calibration_field = baldr.create_calibration_field_for_ZWFS( calibration_source_config_dict, zwfs)
+N_controlled_modes = 20
+zwfs.setup_control_parameters(  calibration_source_config_dict, N_controlled_modes, modal_basis='zernike', pokeAmp = 50e-9 , label='control_method_1')
 
-control_basis = create_control_basis(zwfs.dm, N_controlled_modes=20, basis_modes='zernike')
+plt.imshow(zwfs.control_variables['control_method_1']['sig_on_ref'])
 
-interaction_matrix, control_matrix = build_IM(calibration_field, zwfs.dm, zwfs.FPM, zwfs.det, control_basis, pokeAmp=50e-9)
+# if we want to reconstruct what the modes looked like on the calibration source
+plt.imshow(np.array( zwfs.control_variables['control_method_1']['IM'][2]).reshape(zwfs.mode['detector']['detector_npix'],zwfs.mode['detector']['detector_npix']))
+
+
+#%%
+#control_basis = baldr.create_control_basis(zwfs.dm, N_controlled_modes=20, basis_modes='zernike')
+
+#IM, CM = baldr.build_IM( calibration_field , zwfs.dm, zwfs.FPM, zwfs.det,control_basis, pokeAmp=5e-8)
+
+
+# detect the fields
+calibration_sig = zwfs.detection_chain(calibration_field, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True)
+calibration_sig_OFF = zwfs_OFF.detection_chain(calibration_field, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True)
+
+fig,ax = plt.subplots(2,1)
+ax[0].imshow(calibration_sig.signal)
+ax[1].imshow(calibration_sig_OFF.signal)
+
+# now apply aberration on DM and detect the fields - we should see the off just looks like the pupil while calibration_sig should follow aberration 
+AMP = 1.6/15 * 1e-6
+cmd = AMP * control_basis[6].reshape(-1) # apply a new mode on DM
+zwfs.dm.update_shape(cmd) #
+calibration_field = calibration_field.applyDM(zwfs.dm)
+
+calibration_sig = zwfs.detection_chain(calibration_field, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True)
+calibration_sig_OFF = zwfs_OFF.detection_chain(calibration_field, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True)
+
+fig,ax = plt.subplots(2,1)
+ax[0].imshow(calibration_sig.signal)
+ax[1].imshow(calibration_sig_OFF.signal)
+
+
+
+
+
+#np.max( calibration_field.flux[zwfs.wvls[0]] ) = 6e26!
+# these following steps should be wrapped to attach objects to zwfs
+
+
+
+# detection is turning QE to zero!! could be in the interpolation !
+#sig = det4cal.detect_field( calibration_field, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True)
+#plt.imshow(sig.signal)
+
+# each wvls bin should contribute 
+#np.diff(zwfs.wvls)[0] * (zwfs.mode['telescope']['telescope_diameter']/zwfs.mode['telescope']['telescope_diameter_pixels'])**2 * 1e-3
+
+
+
+
+
+
+# some test s
+plt.figure()
+plt.imshow(zwfs.pup)
+
+fig,ax = plt.subplots(3,3,figsize=(15,15) )
+
+AMP = 1.6e-6/15
+input_field = baldr.create_calibration_field_for_ZWFS( calibration_source_config_dict, zwfs)
+
+ax[0,0].imshow( input_field.phase[zwfs.wvls[0]] ) 
+ax[0,0].set_title('input phase')
+
+cmd = 0 * control_basis[0].reshape(-1) #init flat DM
+zwfs.dm.update_shape(cmd) #
+
+ax[0,1].imshow( zwfs.dm.surface ) 
+ax[0,1].set_title('DM surface 1')
+
+input_field = input_field.applyDM(zwfs.dm) # apply our DM
+outfield = zwfs.FPM.get_output_field( input_field, keep_intermediate_products=False) #get the outputfield from phase mask
+outfield.define_pupil_grid(dx=zwfs.mode['telescope']['telescope_diameter']/zwfs.mode['telescope']['telescope_diameter_pixels'], D_pix=zwfs.mode['telescope']['telescope_diameter_pixels'])
+
+ax[0,2].imshow( abs( outfield.flux[zwfs.wvls[0]] * np.exp(1j*outfield.phase[zwfs.wvls[0]] ) )**2 ) 
+ax[0,2].set_title('output intensity 1')
+
+# 2nd row 
+input_field = baldr.create_calibration_field_for_ZWFS( calibration_source_config_dict, zwfs)
+ax[1,0].imshow( input_field.phase[zwfs.wvls[0]] ) 
+ax[1,0].set_title('input phase')
+
+cmd = AMP * control_basis[6].reshape(-1) # apply a new mode on DM
+zwfs.dm.update_shape(cmd) #
+
+ax[1,1].imshow( zwfs.dm.surface ) 
+ax[1,1].set_title('DM surface 2')
+
+input_field = calibration_field.applyDM(zwfs.dm)
+outfield  = zwfs.FPM.get_output_field( input_field  ,keep_intermediate_products=False)
+outfield.define_pupil_grid(dx=zwfs.mode['telescope']['telescope_diameter']/zwfs.mode['telescope']['telescope_diameter_pixels'], D_pix=zwfs.mode['telescope']['telescope_diameter_pixels'])
+
+ax[1,2].imshow( abs( outfield.flux[zwfs.wvls[0]] * np.exp(1j*outfield.phase[zwfs.wvls[0]] ) )**2 )
+ax[1,2].set_title('output intensity 2')
+
+# 3rd row 
+input_field = baldr.create_calibration_field_for_ZWFS( calibration_source_config_dict, zwfs)
+ax[2,0].imshow( input_field.phase[zwfs.wvls[0]] ) 
+ax[2,0].set_title('input phase')
+
+cmd = AMP * control_basis[6].reshape(-1)  # apply a new mode on DM
+# add some abberations outside the pupil (null space of fibre coupler), make it so total phase shift applied at 4 points = 0. Then we can oscillate 
+aaa= np.zeros(control_basis[0].shape)
+aaa[zwfs.dm.N_act[0]//2,0] = 2*AMP * np.cos(0)
+aaa[0,zwfs.dm.N_act[0]//2] = 2*AMP  * np.cos(np.pi/2)
+aaa[zwfs.dm.N_act[0]//2,-1] = 2*AMP * np.cos(np.pi)
+aaa[-1,zwfs.dm.N_act[0]//2] = 2*AMP * np.cos(3*np.pi/2)
+cmd+=aaa.reshape(-1)
+zwfs.dm.update_shape(cmd) #
+
+ax[2,1].imshow( zwfs.dm.surface ) 
+ax[2,1].set_title('DM surface 2')
+
+input_field = calibration_field.applyDM(zwfs.dm)
+outfield  = zwfs.FPM.get_output_field( input_field  ,keep_intermediate_products=False)
+outfield.define_pupil_grid(dx=zwfs.mode['telescope']['telescope_diameter']/zwfs.mode['telescope']['telescope_diameter_pixels'], D_pix=zwfs.mode['telescope']['telescope_diameter_pixels'])
+
+ax[2,2].imshow( abs( outfield.flux[zwfs.wvls[0]] * np.exp(1j*outfield.phase[zwfs.wvls[0]] ) )**2 )
+ax[2,2].set_title('output intensity 2')
+
+# from ABCD method could recouerate incoherent & coherent flux from central reference field and input field
+
+
+
+
 
 
 #%%

@@ -53,10 +53,10 @@ def init_phasemask_config_dict(use_default_values = True) :
         phasemask_config_dict['on-axis_transparency'] = 1 # unitless (between 0-1). sometimes represented by parameter 'B'
         phasemask_config_dict['on-axis_glass'] = 'sio2' #material type (e.g. 'sio2', 'su8')
         phasemask_config_dict['off-axis_glass'] = 'sio2' #material type
-        phasemask_config_dict['on-axis phasemask depth'] = 21 # um 
-        phasemask_config_dict['off-axis phasemask depth'] = 21-1.6/4 # um  (default causes 90 deg phase shift at 1.6um)
+        phasemask_config_dict['on-axis phasemask depth'] = 1e-6 * 21 # m 
+        phasemask_config_dict['off-axis phasemask depth'] = 1e-6 * (21-1.6/4) # m  (default causes 90 deg phase shift at 1.6um)
         phasemask_config_dict['fratio'] = 21 # unitless
-        phasemask_config_dict['phasemask_diameter'] = 1.06 # lambda/D
+        phasemask_config_dict['phasemask_diameter'] = 1.06 * phasemask_config_dict['fratio'] * 1.6e-6 # meters , defults to 1.06resolution elements at 1.6um (remember diameter = number_of_resolution_elements * f_ratio * lambda )...diffraction limit microscope (m) d = lambda/(2*NA) = lambda * F where F=focal length/D 
         phasemask_config_dict['N_samples_across_phase_shift_region'] = 10 # number of pixels across phase shift region in focal plane
         phasemask_config_dict['nx_size_focal_plane'] = 12*20 # number of pixels in x in focal plane
     else:
@@ -82,7 +82,7 @@ def init_DM_config_dict(use_default_values = True) :
         DM_config_dict['N_act'] = 12 # number of actuators across DM diameter (default is DM is square)
         DM_config_dict['m/V'] = 1 # meters of displacement per volt applied to DM (commands sent in DM update shape are in volts)
         DM_config_dict['angle'] = 0 # angle between DM surface normal and input beam (rad)
-        DM_config_dict['surface_type'] = 'continuos' # options are 'continuous','segmented'
+        DM_config_dict['surface_type'] = 'continuous' # options are 'continuous','segmented'
     else:
         DM_config_dict['N_act'] = np.nan # number of actuators across DM diameter (default is DM is square)
         DM_config_dict['m/V'] = np.nan # meters of displacement per volt applied to DM (commands sent in DM update shape are in volts)
@@ -130,7 +130,7 @@ def init_calibration_source_config_dict(use_default_values = True):
     if use_default_values:
         calibration_source_config_dict['calsource_pup_geometry'] = 'disk' # 'disk', 'AT', or 'UT'
         calibration_source_config_dict['temperature'] = 8000 # Kelvin
-        calibration_source_config_dict['flux'] = 1e-2 # Watts / m^2
+        calibration_source_config_dict['flux'] = 1e-12 # Watts / m^2
     else:
         calibration_source_config_dict['calsource_pup_geometry'] = np.nan # 'disk', 'AT', or 'UT'
         calibration_source_config_dict['temperature'] = np.nan #Kelvin
