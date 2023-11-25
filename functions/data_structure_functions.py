@@ -130,7 +130,7 @@ def init_calibration_source_config_dict(use_default_values = True):
     if use_default_values:
         calibration_source_config_dict['calsource_pup_geometry'] = 'disk' # 'disk', 'AT', or 'UT'
         calibration_source_config_dict['temperature'] = 8000 # Kelvin
-        calibration_source_config_dict['flux'] = 1e-12 # Watts / m^2
+        calibration_source_config_dict['flux'] = 1e-20 # Watts / m^2
     else:
         calibration_source_config_dict['calsource_pup_geometry'] = np.nan # 'disk', 'AT', or 'UT'
         calibration_source_config_dict['temperature'] = np.nan #Kelvin

@@ -21,6 +21,7 @@ import pyzelda.utils.zernike as zernike
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import scipy 
 import copy
+import aotools
 
 #import zelda
 os.chdir('/Users/bcourtne/Documents/ANU_PHD2/baldr')
@@ -35,25 +36,183 @@ phasemask_config = config.init_phasemask_config_dict(use_default_values = True)
 DM_config = config.init_DM_config_dict(use_default_values = True) 
 detector_config = config.init_detector_config_dict(use_default_values = True)
 
-#phasemask_OFF_config = copy.copy(phasemask_config)
-#phasemask_OFF_config['on-axis phasemask depth'] = phasemask_OFF_config['off-axis phasemask depth']
-
+# define a hardware mode for the ZWFS 
 mode_dict = config.create_mode_config_dict( tel_config, phasemask_config, DM_config, detector_config)
-#mode_dict_OFF = config.create_mode_config_dict( tel_config, phasemask_OFF_config, DM_config, detector_config)
 
-zwfs = baldr.ZWFS(mode_dict)
-#zwfs_OFF = baldr.ZWFS(mode_dict_OFF)
+# init out Baldr ZWFS object with the desired mode 
+zwfs = baldr.ZWFS(mode_dict) 
 
+# define an internal calibration source 
 calibration_source_config_dict = config.init_calibration_source_config_dict(use_default_values = True)
-#calibration_field = baldr.create_calibration_field_for_ZWFS( calibration_source_config_dict, zwfs)
 
-N_controlled_modes = 20
-zwfs.setup_control_parameters(  calibration_source_config_dict, N_controlled_modes, modal_basis='zernike', pokeAmp = 50e-9 , label='control_method_1')
+#define what modal basis, and how many how many modes to control, then use internal calibration source to create interaction matrices 
+#and setup control parameters of ZWFS
 
-plt.imshow(zwfs.control_variables['control_method_1']['sig_on_ref'])
+#add control method using first 20 Zernike modes
+zwfs.setup_control_parameters(  calibration_source_config_dict, N_controlled_modes=20, modal_basis='zernike', pokeAmp = 50e-9 , label='control_20_zernike_modes')
+zwfs.setup_control_parameters(  calibration_source_config_dict, N_controlled_modes=70, modal_basis='zernike', pokeAmp = 50e-9 , label='control_70_zernike_modes')
+#add control method using first 20 KL modes
+zwfs.setup_control_parameters(  calibration_source_config_dict, N_controlled_modes=20, modal_basis='KL', pokeAmp = 50e-9 , label='control_20_KL_modes')
+
+
+#%% #---- now consider dectecting and correcting a turbulent input field in open loop 
+input_field_0 = [ baldr.init_a_field( Hmag=4, mode='Kolmogorov', wvls=zwfs.wvls, pup_geometry=zwfs.mode['telescope']['pup_geometry'],\
+             D_pix=zwfs.mode['telescope']['telescope_diameter_pixels'], \
+                 dx=zwfs.mode['telescope']['telescope_diameter']/zwfs.mode['telescope']['telescope_diameter_pixels'], \
+                     r0=0.1, L0=25, phase_scale_factor = 1) ]
+
+"""
+input_field = [ baldr.init_a_field( Hmag=4, mode='2', wvls=zwfs.wvls, pup_geometry=zwfs.mode['telescope']['pup_geometry'],\
+             D_pix=zwfs.mode['telescope']['telescope_diameter_pixels'], \
+                 dx=zwfs.mode['telescope']['telescope_diameter']/zwfs.mode['telescope']['telescope_diameter_pixels'], \
+                     r0=0.1, L0=25, phase_scale_factor = 1e-1) ]"""
+#idea to propagate easily 
+"""aaa = [input_field.phase[zwfs.wvls[0]]]
+for i in range(20):
+    aaa.append( zwfs.pup*( 0.9 * aaa[-1] + 1e-2*np.random.randn(*aaa[-1].shape)))
+    plt.figure()
+    plt.imshow(aaa[-1])"""
+    
+#meth1 = 'control_method_1'
+opd_fig, opd_ax = plt.subplots(1,1)
+svd_fig, svd_ax = plt.subplots(1,1)
+for meth1 in zwfs.control_variables:
+    
+    input_field = copy.copy(input_field_0) #make a copy of the original input field for each method
+    
+    #begin with flat DM
+    flat_cmd=np.zeros(zwfs.dm.N_act).reshape(-1)
+    zwfs.dm.update_shape( flat_cmd ) 
+    
+    sig_cal_on = zwfs.control_variables[meth1]['sig_on_ref'] #intensity measured on calibration source with phase mask in
+    
+    Nph_cal = zwfs.control_variables[meth1]['Nph_cal'] # sum of intensities (#photons) of calibration source with mask out 
+    
+    IM = zwfs.control_variables[meth1]['IM'] #interaction matrix from calibrationn source 
+    CM = zwfs.control_variables[meth1]['CM'] #control matrix from calibrationn source 
+    control_basis = zwfs.control_variables[meth1]['control_basis'] # DM vcontrol basis used to construct IM
+    
+    U,S,Vt = np.linalg.svd( IM )
+    # look at eigenvalues of IM modes
+    svd_ax.plot(S,label=meth1)
+
+    
+    #modal filtering for gains
+    if '70' not in meth1:
+        S_filt = np.array([ s if i<len(S)-2 else 0 for i, s in enumerate(S)  ]) #np.array([ s if s>2e-3 else 0 for s in S  ])
+    else:
+        S_filt = np.array([ s if i<len(S)-10 else 0 for i, s in enumerate(S)  ]) #np.array([ s if s>2e-3 else 0 for s in S  ])
+    
+    # just use at begining of observsation (don't update)
+    sig_turb_off = zwfs.detection_chain( input_field[-1] , FPM_on=False) #intensity measured on sky with phase mask out
+    
+    Nph_obj = np.sum(sig_turb_off.signal) # sum of intensities (#photons) of on sky source with mask out 
+    
+    
+    opd_rms = [np.std( input_field[-1].phase[zwfs.wvls[0]][zwfs.pup >0.5])]
+    for i in range(40):
+        
+        cmd_tm1 = zwfs.dm.surface.reshape(-1) #prior cmd 
+        # writing shorthand notations ...
+        sig_turb = zwfs.detection_chain( input_field[-1] , FPM_on=True)  #intensity measured on sky with phase mask in
+    
+        #plt.imshow(sig_turb.signal)
+        #plt.imshow(input_field.phase[zwfs.wvls[0]])
+        
+        
+        # control_matrix @ 1/M * ( sig - M/N * ref_sig )
+        modal_reco_list = CM.T @ (  1/Nph_obj * (sig_turb.signal - Nph_obj/Nph_cal * sig_cal_on.signal) ).reshape(-1) #list of amplitudes of the modes measured by the ZWFS
+        modal_gains = -0.8 * S_filt  / np.max(S_filt) * zwfs.control_variables[meth1]['pokeAmp'] # -1 * zwfs.control_variables[meth1]['pokeAmp']* np.ones( len(modal_reco_list) ) # we set the gain by the poke amplitude 
+        dm_reco = np.sum( np.array([ g * a * Z for g,a,Z in  zip(modal_gains,modal_reco_list, control_basis)]) , axis=0)
+        
+        #dm_reco = np.sum( np.array([ modal_gains[i] * a * Z for i,(a,Z) in enumerate( zip(modal_reco_list, control_basis))]) , axis=0)
+        
+        cmd_t = dm_reco.reshape(-1) #new command 
+        zwfs.dm.update_shape( cmd_t ) #0.9 * cmd_t + 0.1 * cmd_tm1 )   #update our DM shape
+        
+        #sig_turb_after = zwfs.detection_chain( input_field[-1] , FPM_on=True)
+        
+        input_field.append( input_field[-1].applyDM(zwfs.dm) )
+        
+        opd_rms.append(np.std( input_field[-1].phase[zwfs.wvls[0]][zwfs.pup >0.5]) ) 
+    
+    
+    #plt.imshow(input_field[-1].phase[zwfs.wvls[0]])
+    #plt.imshow(zwfs.dm.surface)
+    
+    opd_ax.plot( np.exp( - np.array(opd_rms)**2 ), label=meth1 )
+    
+opd_ax.set_ylabel('Strehl ratio (H-Band)')
+opd_ax.set_xlabel('iterations (1ms DIT)')
+opd_ax.legend()
+opd_ax.set_title('open loop convergence on stationary phase screen')
+
+svd_ax.set_ylabel('singular values')
+svd_ax.set_xlabel('mode #')
+svd_ax.legend()
+
+#plt.figure()
+#plt.plot(opd_rms)
+
+
+#%% Full closed loop 
+r0 = 0.1 #m , defined at 500nm 
+L0 = 25 #m
+throughput = 0.01
+Hmag = 3 
+
+Hmag_at_vltiLab = Hmag  - 2.5*np.log10(throughput)
+
+seed_phase_screen =  aotools.turbulence.infinitephasescreen.PhaseScreenVonKarman(nx_size = zwfs.mode['telescope']['telescope_diameter_pixels'], pixel_scale=zwfs.mode['telescope']['telescope_diameter']/zwfs.mode['telescope']['telescope_diameter_pixels'],\
+                r0=r0 , L0=L0, n_columns=2,random_seed = 1)
+seed_flux = baldr.star2photons('H', Hmag_at_vltiLab, airmass=1, k = 0.18, ph_m2_s_nm = True)
+
+# add random noise on photometry that matches scinilation spectrum (can do empirically from IRIS data )
+
+# for each method begin with phase_screen = copy.copy( seed_phase_screen ), then create field 
+
+phase_screen = copy.copy( seed_phase_screen )
+
+#for X in y:
+phase_screen.add_row()
+field_phase = [(500e-9/w)**(6/5) * phase_screen.scrn for w in zwfs.wvls]
+field_flux = [ seed_flux * zwfs.pup  for w in zwfs.wvls] # could add noise here too
+
+
+#%%
+
+#plt.imshow( zwfs.dm.surface )
+
+# estimate #photons 
+#sig_off=baldr.detection_chain(input_field, dm, FPM_cal, det)
+#sig_off.signal = np.mean( [baldr.detection_chain(input_field, dm, FPM_cal, det).signal for _ in range(10)]  , axis=0) # average over a few 
+#Nph = np.sum(sig_off.signal)
+
+# detect input field
+sig_turb = baldr.detection_chain(input_field, zwfs.dm, zwfs.FPM, zwfs.det)
+
+#important to scale reference field by ratio of phtons in calibrator vs target 
+modal_reco_list = pinv_IM_modal.T @ (  1/Nph * (sig_turb.signal - Nph/Nph_cal * sig_on_ref.signal) ).reshape(-1) 
+gains =  -pokeAmp * np.ones( len(modal_reco_list) ) #[0] + list(-25e-9 * np.ones( len(modal_reco_list)-1 )) +[0]
+
+dm_reco = np.sum( np.array([gains[i] * a * Z for i,(a,Z) in enumerate( zip(modal_reco_list, control_basis))]) , axis=0)
+
+
+cmd=dm_reco.reshape(-1)
+
+dm.update_shape( cmd )   
+
+
+
+#plt.imshow(zwfs.control_variables['control_method_1']['sig_on_ref'])
 
 # if we want to reconstruct what the modes looked like on the calibration source
+plt.figure()
 plt.imshow(np.array( zwfs.control_variables['control_method_1']['IM'][2]).reshape(zwfs.mode['detector']['detector_npix'],zwfs.mode['detector']['detector_npix']))
+
+
+
+
 
 
 #%%

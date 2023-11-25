@@ -881,8 +881,8 @@ class ZWFS():
         self.control_variables[label]['pokeAmp'] = pokeAmp
         self.control_variables[label]['N_controlled_modes'] = N_controlled_modes
         self.control_variables[label]['Nph_cal'] = Nph_cal
-        self.control_variables[label]['sig_on_ref'] = sig_on.signal
-        self.control_variables[label]['sig_off_ref'] = sig_off.signal
+        self.control_variables[label]['sig_on_ref'] = sig_on
+        self.control_variables[label]['sig_off_ref'] = sig_off
         
 
         # TO DO
@@ -964,7 +964,74 @@ class ZWFS():
         return( sig )
     
         
+
+def init_a_field( Hmag, mode, wvls, pup_geometry, D_pix, dx, r0=0.1, L0=25, phase_scale_factor = 1):
+    """
     
+
+    Parameters
+    ----------
+    Hmag : TYPE - float
+        DESCRIPTION. H magnitude of field
+    mode : TYPE- string or int 
+        DESCRIPTION. either 'Kolmogorov' or a Noll index (int) of zernike mode:
+            ['Piston', 'Tilt X', 'Tilt Y', 'Focus', 'Astigmatism 45', 'Astigmatism 0', 'Coma Y', 'Coma X', 'Trefoil Y', 'Trefoil X', 'Spherical', '2nd Astig 0', '2nd Astig 45', 'Tetrafoil 0', 'Tetrafoil 22.5', '2nd coma X', '2nd coma Y', '3rd Astig X', '3rd Astig Y'])
+    wvls : TYPE. array like
+        DESCRIPTION. wavelengths to create field at 
+    pup_geometry : TYPE - string
+        DESCRIPTION. either 'disk', 'AT, or'UT''
+    D_pix : TYPE int
+        DESCRIPTION. number of pixels across pupil diameter
+    dx : TYPE float
+        DESCRIPTION. pixel scale (meters / pixel)
+    r0 : TYPE, optional, float
+        DESCRIPTION. Fried parameter (m), only applicable if Kolmogorov mode is selected
+    L0 : TYPE, optional, float
+        DESCRIPTION. outerscale (m), only applicable if Kolmogorov mode is selected
+    phase_scale_factor : TYPE, optional, float
+        DESCRIPTION. The default is 1. scale factor to multiply phase amplitude by 
+
+    Returns
+    -------
+    None.
+
+    """
+    
+    basis = zernike.zernike_basis(nterms=30, npix=D_pix)
+
+    basis_name2i = {zernike.zern_name(i):i for i in range(1,30)}
+    basis_i2name = {v:k for k,v in basis_name2i.items()}
+    
+
+    # ============ set up input field  
+    ph_flux_H = star2photons('H', Hmag, airmass=1, k = 0.18, ph_m2_s_nm = True) # convert stellar mag to ph/m2/s/nm 
+    
+    pup = pick_pupil(pupil_geometry=pup_geometry, dim=D_pix, diameter=D_pix) # baldr.AT_pupil(dim=D_pix, diameter=D_pix) #telescope pupil
+
+    #np.num2nan( ) pup_nan[pup<0.5] = np.nan
+    
+    if mode == 'Kolmogorov':
+
+        phase = aotools.turbulence.infinitephasescreen.PhaseScreenVonKarman(D_pix, pixel_scale=dx,\
+                r0=r0 , L0=L0, n_columns=2,random_seed = 1)
+
+        input_phases = phase_scale_factor * np.array( [ np.nan_to_num( pup * phase.scrn ) * (500e-9/w)**(6/5) for w in wvls] )
+       
+    else:
+        mode=int(mode)
+        print(f'using {basis_i2name[mode+1]}')
+        phase = basis[ mode ]
+
+        input_phases = phase_scale_factor * np.array( [ np.nan_to_num( pup * phase ) * (500e-9/w)**(6/5) for w in wvls] )
+    
+    input_fluxes = [ph_flux_H * pup  for _ in wvls] # ph_m2_s_nm
+    
+    input_field = field( phases =  input_phases  , fluxes = input_fluxes  , wvls=wvls )
+    input_field.define_pupil_grid(dx=dx, D_pix=D_pix)
+    
+    return(input_field)
+
+
     
 def detection_chain(input_field, dm, FPM, det, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True, nx_size_focal_plane = None, dx_focal_plane=None):
     """
