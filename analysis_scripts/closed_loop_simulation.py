@@ -56,6 +56,8 @@ zwfs.setup_control_parameters(  calibration_source_config_dict, N_controlled_mod
 
 
 #%% #---- now consider dectecting and correcting a turbulent input field in open loop 
+
+field_wvls = np.hstack( (np.linspace(0.9e-6,1.3e-6,10), zwfs.wvls ) )
 input_field_0 = [ baldr.init_a_field( Hmag=4, mode='Kolmogorov', wvls=zwfs.wvls, pup_geometry=zwfs.mode['telescope']['pup_geometry'],\
              D_pix=zwfs.mode['telescope']['telescope_diameter_pixels'], \
                  dx=zwfs.mode['telescope']['telescope_diameter']/zwfs.mode['telescope']['telescope_diameter_pixels'], \
@@ -156,16 +158,81 @@ svd_ax.legend()
 
 
 #%% Full closed loop 
+
+#----------------
+# Parameters 
 r0 = 0.1 #m , defined at 500nm 
 L0 = 25 #m
+V=25 #50
+lag1 = 3e-3 #s, lag from first stage aAO system
+naomi_wvl = 0.6e-6 #m @central wvl of naomi (first stage AO)
 throughput = 0.01
 Hmag = 3 
-
 Hmag_at_vltiLab = Hmag  - 2.5*np.log10(throughput)
+field_wvls = np.hstack( (np.linspace(0.9e-6,1.3e-6,10), zwfs.wvls ) ) # field wavelengths to run the simulaiton for 
 
 seed_phase_screen =  aotools.turbulence.infinitephasescreen.PhaseScreenVonKarman(nx_size = zwfs.mode['telescope']['telescope_diameter_pixels'], pixel_scale=zwfs.mode['telescope']['telescope_diameter']/zwfs.mode['telescope']['telescope_diameter_pixels'],\
                 r0=r0 , L0=L0, n_columns=2,random_seed = 1)
-seed_flux = baldr.star2photons('H', Hmag_at_vltiLab, airmass=1, k = 0.18, ph_m2_s_nm = True)
+#dt = 3e-3
+# if dt > DIT, or DIT < dt.  ?? dt always < DIT or DIT=dt. dx/V = how many seconds until we need to roll screen, = dx/V / dt iterations
+# need to test signal from X second DIT = sum_i(signal_i) from X/i second DIT?? 
+
+
+#----------------
+# First Stage AO 
+phase_screen = copy.copy( seed_phase_screen ) # copy the seed screen 
+ao_screens = baldr.modal_AO_correction( phase_screen, n_modes=14, lag=lag1, Ki=.95, Kp=1.1, V=V, \
+                                       dx=zwfs.mode['telescope']['telescope_diameter']/zwfs.mode['telescope']['telescope_diameter_pixels'] , \
+                                           wvls=field_wvls , wfs_wvl=naomi_wvl, it=100, pup= None)
+
+#no_AO_screen = copy.copy( seed_phase_screen ) 
+
+# lets see what it looks like
+after_strehl_0 =  np.array( [np.exp( -np.nanvar( 2*np.pi/field_wvls[0] * p ) ) for p in np.array( ao_screens )[:,0,:,:]] )
+after_strehl_1 =  np.array( [np.exp( -np.nanvar( 2*np.pi/field_wvls[-1] * p ) ) for p in np.array( ao_screens )[:,-1,:,:]] )
+plt.plot( after_strehl_0 ,label=f'{round(field_wvls[0]*1e6,2)}um') ; plt.plot( after_strehl_1, label=f'{round(field_wvls[-1]*1e6,2)}um')
+plt.legend()
+plt.ylabel('Strehl Ratio')
+plt.xlabel('simulation iteration')
+
+# now convert this to field objects
+
+"""
+
+# 
+# #%% pre processed screens 
+phase_screens = np.array( [pup * screens.add_row() for i in range(1000)] )   
+# 
+opd_screens={}
+for w in [naomi_wvl] + list(zwfs.wvls) :
+#     
+     opd_screens[w] = np.array([baldr.calibrate_phase_screen2wvl(w, w/(2*np.pi) * pup * phi)  for phi in phase_screens])
+# 
+ao_screens = baldr.modal_AO_correction( opd_screens, n_modes=14, lag=lag, Ki=.95, Kp=1.1, V=V, dx=dx , wvls=wvls , wfs_wvl=wfs_wvl, it=1000, pup= None)
+# 
+w = wvls[1]
+before_strehl = np.array( [np.exp( -np.nanvar( 2*np.pi/w * p ) ) for p in opd_screens[w]] )
+after_strehl =  np.array( [np.exp( -np.nanvar( 2*np.pi/w * p ) ) for p in np.array( ao_screens )[:,2,:,:]] )
+plt.figure()
+plt.plot(before_strehl); plt.plot( after_strehl, label='after'), plt.legend()
+# 
+# #aa =modal_AO_correction( phase_screen, n_modes=14, lag=lag, Ki=.95, Kp=1.1, V=V, dx=phase_screen.pixel_scale , wvls=[1.1e-6, 1.65e-6] , wfs_wvl=0.6e-6, it=1000, pup= None)
+# 
+# #%% or with the original ao tools screens (no pre processing). This is slower but avoids storing large arrays in memory
+# 
+#ao_screens = baldr.modal_AO_correction( screens, n_modes=14, lag=lag, Ki=.95, Kp=1.1, V=V, dx=dx , wvls=wvls , wfs_wvl=wfs_wvl, it=100, pup= None)
+# 
+#w = wvls[1]
+#before_strehl = np.array( [np.exp( -np.nanvar( 2*np.pi/w * p ) ) for p in opd_screens[w]] )
+#after_strehl =  np.array( [np.exp( -np.nanvar( 2*np.pi/w * p ) ) for p in np.array( ao_screens )[:,2,:,:]] )
+#plt.plot(before_strehl); plt.plot( after_strehl, label='after'), plt.legend()
+
+
+# then I need to make sure that the zwfs detector only measures in specific band that is zwfs.wvls, what happens if 
+# field wvls is outside of this ?
+
+
+
 
 # add random noise on photometry that matches scinilation spectrum (can do empirically from IRIS data )
 
@@ -174,11 +241,62 @@ seed_flux = baldr.star2photons('H', Hmag_at_vltiLab, airmass=1, k = 0.18, ph_m2_
 phase_screen = copy.copy( seed_phase_screen )
 
 #for X in y:
+define an iteration 
 phase_screen.add_row()
 field_phase = [(500e-9/w)**(6/5) * phase_screen.scrn for w in zwfs.wvls]
 field_flux = [ seed_flux * zwfs.pup  for w in zwfs.wvls] # could add noise here too
+"""
+#%% 
+# spatially filter first 50 modes then add 100nm RMS for tip tilt
+D = 1.8
+D_pix = 2**8
+dx = D/D_pix
+wvls =  np.linspace(1.1e-6 ,1.7e-6, 5) 
+wfs_wvl = 0.6e-6
+basis = zernike.zernike_basis(nterms=50, npix=D_pix)
+pup = basis[0]
+# 
+screens = aotools.turbulence.infinitephasescreen.PhaseScreenVonKarman(nx_size=D_pix,pixel_scale=dx,r0=0.1,L0=25)
+
+Z_coes = zernike.opd_expand(screens.scrn * pup, nterms=50, basis=zernike.zernike_basis)
+phi_est = np.sum( basis * np.array(Z_coes)[:,np.newaxis, np.newaxis] , axis=0) 
+
+# spatially filter first 50 modes then add 100nm RMS for tip tilt
+print( 'WFE = ',((1.2 * np.nanstd( screens.scrn * pup - phi_est ) / (np.pi*2) )**2 + 0.1**2)**0.5, 'um rms')
 
 
+# 
+# 
+V=50
+dx=D/pup.shape[0]
+lag=1e-3
+# 
+# #%% pre processed screens 
+phase_screens = np.array( [pup * screens.add_row() for i in range(100)] )   
+# 
+opd_screens={}
+for w in [wfs_wvl] + list(wvls) :
+#     
+     opd_screens[w] = np.array([baldr.calibrate_phase_screen2wvl(w, w/(2*np.pi) * pup * phi)  for phi in phase_screens])
+# 
+ao_screens = baldr.modal_AO_correction( opd_screens, n_modes=50, lag=lag, Ki=.95, Kp=1.1, V=V, dx=dx , wvls=wvls , wfs_wvl=wfs_wvl, it=1000, pup= None)
+# 
+w = wvls[1]
+before_strehl = np.array( [np.exp( -np.nanvar( 2*np.pi/w * p ) ) for p in opd_screens[w]] )
+after_strehl =  np.array( [np.exp( -np.nanvar( 2*np.pi/w * p ) ) for p in np.array( ao_screens )[:,2,:,:]] )
+plt.figure()
+plt.plot(before_strehl); plt.plot( np.exp(-(np.pi*2/1.2 *0.24)**2)*after_strehl, label='after'), plt.legend()
+# 
+# #aa =modal_AO_correction( phase_screen, n_modes=14, lag=lag, Ki=.95, Kp=1.1, V=V, dx=phase_screen.pixel_scale , wvls=[1.1e-6, 1.65e-6] , wfs_wvl=0.6e-6, it=1000, pup= None)
+# 
+# #%% or with the original ao tools screens (no pre processing). This is slower but avoids storing large arrays in memory
+# 
+#ao_screens = baldr.modal_AO_correction( screens, n_modes=14, lag=lag, Ki=.95, Kp=1.1, V=V, dx=dx , wvls=wvls , wfs_wvl=wfs_wvl, it=100, pup= None)
+# 
+w = wvls[1]
+#before_strehl = np.array( [np.exp( -np.nanvar( 2*np.pi/w * p ) ) for p in opd_screens[w]] )
+#after_strehl =  np.array( [np.exp( -np.nanvar( 2*np.pi/w * p ) ) for p in np.array( ao_screens )[:,2,:,:]] )
+#plt.plot(before_strehl); plt.plot( after_strehl, label='after'), plt.legend()
 #%%
 
 #plt.imshow( zwfs.dm.surface )
