@@ -325,8 +325,8 @@ sig_turb_off = zwfs.detection_chain( ao_1_fields[0] , FPM_on=False) #intensity m
 Nph_obj = np.sum(sig_turb_off.signal) # sum of intensities (#photons) of on sky source with mask out 
 
 
-baldr_Ki = 0.15 #0.75 #0.0
-baldr_Kp = 10 #1. #2.
+baldr_Ki = 0.95 #0.75 #0.0
+baldr_Kp = 1.1 #1. #2.
 
 wvl_indx = 7 # wvl to measure telemetry  (ao_1_fields[0].wvl[7] ~ 1.2um)
 wvl_key = ao_1_fields[0].wvl[wvl_indx]
@@ -340,7 +340,7 @@ strehl_before = np.array( [ np.exp(-np.var( p[zwfs.pup >0.5] ))  for p in np.arr
 
 
 #input_field = [ao_1_fields[0]] #
-cmd_t = flat_cmd # initial baldr dm to flat 
+cmd = flat_cmd # initial baldr dm to flat 
 
 opd_after = []
 strehl_after = []
@@ -357,7 +357,7 @@ for i in range(len(t_baldr)):
     strehl_after.append( np.exp(-np.var( baldr_corrrected_field.phase[wvl_key][zwfs.pup >0.5]) ) ) 
     # we do our wfsing 
     # first swap our current DM cmd to our last one
-    cmd_tm1 = cmd_t
+    cmd_tm1 = cmd
     
     #now detect our baldr corrected field 
     sig_turb = zwfs.detection_chain(baldr_corrrected_field, FPM_on=True)  #intensity measured on sky with phase mask in
@@ -367,14 +367,15 @@ for i in range(len(t_baldr)):
     
     # control_matrix @ 1/M * ( sig - M/N * ref_sig )
     modal_reco_list = CM.T @ (  1/Nph_obj * (sig_turb.signal - Nph_obj/Nph_cal * sig_cal_on.signal) ).reshape(-1) #list of amplitudes of the modes measured by the ZWFS
-    modal_gains = -0.8 * S_filt  / np.max(S_filt) * zwfs.control_variables[meth1]['pokeAmp'] # -1 * zwfs.control_variables[meth1]['pokeAmp']* np.ones( len(modal_reco_list) ) # we set the gain by the poke amplitude 
+    modal_gains = -0.9 * S_filt  / np.max(S_filt) * zwfs.control_variables[meth1]['pokeAmp'] # -1 * zwfs.control_variables[meth1]['pokeAmp']* np.ones( len(modal_reco_list) ) # we set the gain by the poke amplitude 
     dm_reco = np.sum( np.array([ g * a * Z for g,a,Z in  zip(modal_gains,modal_reco_list, control_basis)]) , axis=0)
     
     #dm_reco = np.sum( np.array([ modal_gains[i] * a * Z for i,(a,Z) in enumerate( zip(modal_reco_list, control_basis))]) , axis=0)
     
-    cmd_t = dm_reco.reshape(-1) #new command 
+    opd_est = dm_reco.reshape(-1) #new command 
+    cmd = baldr_Ki * (baldr_Kp * opd_est +  cmd_tm1 )
     # update dm shape based on our PI controller
-    zwfs.dm.update_shape( baldr_Ki * (baldr_Kp * cmd_t +  cmd_tm1 ) )   #update our DM shape
+    zwfs.dm.update_shape( cmd ) #baldr_Ki * (baldr_Kp * cmd_t +  cmd_tm1 ) )   #update our DM shape
     
     #sig_turb_after = zwfs.detection_chain( input_field[-1] , FPM_on=True)
     
