@@ -17,6 +17,7 @@ import numpy as np
 import pylab as plt
 import pandas as pd
 import os
+from scipy.interpolate import interp1d
 import pyzelda.utils.zernike as zernike
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import scipy 
@@ -29,6 +30,42 @@ os.chdir('/Users/bcourtne/Documents/ANU_PHD2/baldr')
 from functions import baldr_functions_2 as baldr
 from functions import data_structure_functions as config
 
+    
+def plot_ao_correction_process(phase_before, phase_reco, phase_after , title_list =None):
+    """ everything should be input as  micrometer OPD """
+    
+    fig = plt.figure(figsize=(16, 12))
+    
+    ax1 = fig.add_subplot(131)
+    ax1.set_title('phase before',fontsize=20)
+    ax1.axis('off')
+    im1 = ax1.imshow(  phase_before )
+    
+    divider = make_axes_locatable(ax1)
+    cax = divider.append_axes('bottom', size='5%', pad=0.05)
+    cbar = fig.colorbar( im1, cax=cax, orientation='horizontal')
+    cbar.set_label( r'OPD $(\mu m)$', rotation=0)
+    
+    ax2 = fig.add_subplot(132)
+    ax2.set_title('reconstructed phase',fontsize=20)
+    ax2.axis('off')
+    im2 = ax2.imshow( phase_reco )
+    
+    divider = make_axes_locatable(ax2)
+    cax = divider.append_axes('bottom', size='5%', pad=0.05)
+    cbar = fig.colorbar(im2, cax=cax, orientation='horizontal')
+    cbar.set_label( r'OPD $(\mu m)$', rotation=0)
+    
+    ax3 = fig.add_subplot(133)
+    ax3.set_title('Residual',fontsize=20)
+    ax3.axis('off')
+    im3 = ax3.imshow( phase_after ) 
+    
+    divider = make_axes_locatable(ax3)
+    cax = divider.append_axes('bottom', size='5%', pad=0.05)
+    cbar = fig.colorbar(im3, cax=cax, orientation='horizontal')
+    cbar.set_label( r'OPD $(\mu m)$', rotation=0)
+    
     
 # testing the new configuration formating 
 tel_config =  config.init_telescope_config_dict(use_default_values = True)
@@ -163,12 +200,21 @@ svd_ax.legend()
 # Parameters 
 r0 = 0.1 #m , defined at 500nm 
 L0 = 25 #m
-V=25 #50
-lag1 = 3e-3 #s, lag from first stage aAO system
+V=50 #50
+lag1 = 6e-3 # with 14 modes 3e-3 #s, lag from first stage aAO system
 naomi_wvl = 0.6e-6 #m @central wvl of naomi (first stage AO)
 throughput = 0.01
-Hmag = 3 
+Hmag = 0
 Hmag_at_vltiLab = Hmag  - 2.5*np.log10(throughput)
+flux_at_vltilab = baldr.star2photons('H',Hmag_at_vltiLab,airmass=1,k=0.18,ph_m2_s_nm=True) #ph/m2/s/nm
+
+dt = (zwfs.mode['telescope']['telescope_diameter']/zwfs.mode['telescope']['telescope_diameter_pixels']) / V # = dx/V - sample time of first stage AO sim
+
+it = 500 # iterations 
+
+
+t = np.arange(0, it*dt, dt)
+
 field_wvls = np.hstack( (np.linspace(0.9e-6,1.3e-6,10), zwfs.wvls ) ) # field wavelengths to run the simulaiton for 
 
 seed_phase_screen =  aotools.turbulence.infinitephasescreen.PhaseScreenVonKarman(nx_size = zwfs.mode['telescope']['telescope_diameter_pixels'], pixel_scale=zwfs.mode['telescope']['telescope_diameter']/zwfs.mode['telescope']['telescope_diameter_pixels'],\
@@ -181,21 +227,177 @@ seed_phase_screen =  aotools.turbulence.infinitephasescreen.PhaseScreenVonKarman
 #----------------
 # First Stage AO 
 phase_screen = copy.copy( seed_phase_screen ) # copy the seed screen 
-ao_screens = baldr.modal_AO_correction( phase_screen, n_modes=14, lag=lag1, Ki=.95, Kp=1.1, V=V, \
+ao_screens = baldr.modal_AO_correction( phase_screen, n_modes=7, lag=lag1, Ki=.95, Kp=1.1, V=V, \
                                        dx=zwfs.mode['telescope']['telescope_diameter']/zwfs.mode['telescope']['telescope_diameter_pixels'] , \
-                                           wvls=field_wvls , wfs_wvl=naomi_wvl, it=100, pup= None)
+                                           wvls=field_wvls , wfs_wvl=naomi_wvl, it=it, pup= None) #OPD in meters
+#convert OPD to radians
+ao_screens = [[2*np.pi/w * p for p,w in zip(ao_screens[i], field_wvls)] for i in range(len(ao_screens))]
+
+
+# write to fits with r0, L0, V, lag1, naomi_wvl, dt, it, 
+
+# then read in , create t from dt, it
+
+# convert fits phase screens to field objects to pass through zwfs 
+#  if first stage sampling is less than Baldr dit I average the phase over Baldr DIT I have to average phase over 
+dt_baldr = zwfs.mode['detector']['DIT']
+t_baldr = np.arange(0, max(t), dt_baldr)
+
+# create interpolation function of first AO stage phase screens, then smear based on difference of baldr dt and first stage AO dt
+ao_smeared_screens=[]
+for wvl_indx, w in enumerate( field_wvls ):
+    phase_interp_fn_at_wvl = interp1d(t, np.array( ao_screens)[:,wvl_indx ,:,:] , axis = 0)
+    
+    # interpolate onto new grid we min| dt - dt_new| such that dt*N = dt_baldr  for some integer N 
+    N = int( dt_baldr/dt)
+    dt_new = dt_baldr/N
+    t_new = np.arange(min(t), max(t),dt_new)
+    ao_interp_screens = phase_interp_fn_at_wvl(t_new)
+    
+    # then we blur (average) phase over baldr integration time
+    ao_smeared_screens_wvl=[]
+    for i in range(len(t_baldr)):
+        ao_smeared_screens_wvl.append( np.mean(ao_interp_screens[i:i+N],axis=0) )
+    ao_smeared_screens.append(ao_smeared_screens_wvl )
+    
+ao_smeared_screens = np.transpose(np.array(ao_smeared_screens), axes=(1,0,2,3)) # transpose to put time first axis , wvls second axis 
+# check 
+if ao_smeared_screens.shape[0] != len(t_baldr):
+    raise TypeError('new smeared phase screen length does not match length of baldr time series t_baldr')
+ 
+    
+# now convert this to field objects
+ao_1_fields=[]
+for i in range(len(t_baldr)):
+    field_i = baldr.field(fluxes = [zwfs.pup *flux_at_vltilab for _ in field_wvls], phases =  np.nan_to_num(ao_smeared_screens[i],0), wvls =field_wvls)
+    field_i.define_pupil_grid(dx=zwfs.mode['telescope']['telescope_diameter']/zwfs.mode['telescope']['telescope_diameter_pixels'], D_pix=zwfs.mode['telescope']['telescope_diameter_pixels'])
+    ao_1_fields.append( field_i )
+# then we should get matching lens between this and t_baldr!!
+
+
+plt.figure()
+plt.imshow(ao_1_fields[0].phase[zwfs.wvls[0]])
+# convert nana to zero
+#ao_screens = np.nan_to_num(ao_screens,0)
 
 #no_AO_screen = copy.copy( seed_phase_screen ) 
 
 # lets see what it looks like
-after_strehl_0 =  np.array( [np.exp( -np.nanvar( 2*np.pi/field_wvls[0] * p ) ) for p in np.array( ao_screens )[:,0,:,:]] )
-after_strehl_1 =  np.array( [np.exp( -np.nanvar( 2*np.pi/field_wvls[-1] * p ) ) for p in np.array( ao_screens )[:,-1,:,:]] )
+after_strehl_0 =  np.array( [np.exp( -np.nanvar(  p ) ) for p in np.array( ao_screens )[:,0,:,:]] )
+after_strehl_1 =  np.array( [np.exp( -np.nanvar( p ) ) for p in np.array( ao_screens )[:,-1,:,:]] )
+plt.figure()
 plt.plot( after_strehl_0 ,label=f'{round(field_wvls[0]*1e6,2)}um') ; plt.plot( after_strehl_1, label=f'{round(field_wvls[-1]*1e6,2)}um')
 plt.legend()
 plt.ylabel('Strehl Ratio')
 plt.xlabel('simulation iteration')
 
-# now convert this to field objects
+
+
+
+
+#%% NOW DOING FULL CLOSED LOOPWITH BALDR AFTER §1ST STAGE AO
+
+# need to get dt from 1st stage ao simulation then just repeat the screens to get the appropiate simulation dt time for baldr simulation 
+meth1 = 'control_20_zernike_modes' #zwfs.control_variables
+## now do closed loop 
+#begin with flat DM
+flat_cmd=np.zeros(zwfs.dm.N_act).reshape(-1)
+zwfs.dm.update_shape( flat_cmd ) 
+
+sig_cal_on = zwfs.control_variables[meth1]['sig_on_ref'] #intensity measured on calibration source with phase mask in
+
+Nph_cal = zwfs.control_variables[meth1]['Nph_cal'] # sum of intensities (#photons) of calibration source with mask out 
+
+IM = zwfs.control_variables[meth1]['IM'] #interaction matrix from calibrationn source 
+CM = zwfs.control_variables[meth1]['CM'] #control matrix from calibrationn source 
+control_basis = zwfs.control_variables[meth1]['control_basis'] # DM vcontrol basis used to construct IM
+
+U,S,Vt = np.linalg.svd( IM )
+# look at eigenvalues of IM modes
+svd_ax.plot(S,label=meth1)
+
+#filter some modes
+S_filt = np.array([ s if i<len(S)-2 else 0 for i, s in enumerate(S)  ])
+ 
+# just use at begining of observsation (don't update)
+sig_turb_off = zwfs.detection_chain( ao_1_fields[0] , FPM_on=False) #intensity measured on sky with phase mask out
+
+Nph_obj = np.sum(sig_turb_off.signal) # sum of intensities (#photons) of on sky source with mask out 
+
+
+baldr_Ki = 0.15 #0.75 #0.0
+baldr_Kp = 10 #1. #2.
+
+wvl_indx = 7 # wvl to measure telemetry  (ao_1_fields[0].wvl[7] ~ 1.2um)
+wvl_key = ao_1_fields[0].wvl[wvl_indx]
+#on smeared screens
+opd_before = np.array( [np.std( p[zwfs.pup >0.5] )  for p in np.array( ao_smeared_screens )[:,wvl_indx,:,:]] )
+strehl_before = np.array( [ np.exp(-np.var( p[zwfs.pup >0.5] ))  for p in np.array( ao_smeared_screens )[:,wvl_indx,:,:] ] )
+
+#on original screens
+#opd_before = np.array( [np.nanstd( p[zwfs.pup >0.5] )  for p in np.array( ao_screens )[:,wvl_indx,:,:]] )
+#strehl_before = np.array( [ np.exp(-np.nanvar( p[zwfs.pup >0.5] ))  for p in np.array( ao_screens )[:,wvl_indx,:,:] ] )
+
+
+#input_field = [ao_1_fields[0]] #
+cmd_t = flat_cmd # initial baldr dm to flat 
+
+opd_after = []
+strehl_after = []
+asgard_field = []
+for i in range(len(t_baldr)):
+        
+    # we apply the current dm shape to the input field coming from first stage AO correction 
+    baldr_corrrected_field = ao_1_fields[i].applyDM(zwfs.dm) 
+    
+    asgard_field.append( baldr_corrrected_field )
+    
+    #we record some telemetry 
+    opd_after.append(np.std( baldr_corrrected_field.phase[wvl_key][zwfs.pup >0.5]) ) 
+    strehl_after.append( np.exp(-np.var( baldr_corrrected_field.phase[wvl_key][zwfs.pup >0.5]) ) ) 
+    # we do our wfsing 
+    # first swap our current DM cmd to our last one
+    cmd_tm1 = cmd_t
+    
+    #now detect our baldr corrected field 
+    sig_turb = zwfs.detection_chain(baldr_corrrected_field, FPM_on=True)  #intensity measured on sky with phase mask in
+
+    #plt.imshow(sig_turb.signal)
+    #plt.imshow(input_field.phase[zwfs.wvls[0]])
+    
+    # control_matrix @ 1/M * ( sig - M/N * ref_sig )
+    modal_reco_list = CM.T @ (  1/Nph_obj * (sig_turb.signal - Nph_obj/Nph_cal * sig_cal_on.signal) ).reshape(-1) #list of amplitudes of the modes measured by the ZWFS
+    modal_gains = -0.8 * S_filt  / np.max(S_filt) * zwfs.control_variables[meth1]['pokeAmp'] # -1 * zwfs.control_variables[meth1]['pokeAmp']* np.ones( len(modal_reco_list) ) # we set the gain by the poke amplitude 
+    dm_reco = np.sum( np.array([ g * a * Z for g,a,Z in  zip(modal_gains,modal_reco_list, control_basis)]) , axis=0)
+    
+    #dm_reco = np.sum( np.array([ modal_gains[i] * a * Z for i,(a,Z) in enumerate( zip(modal_reco_list, control_basis))]) , axis=0)
+    
+    cmd_t = dm_reco.reshape(-1) #new command 
+    # update dm shape based on our PI controller
+    zwfs.dm.update_shape( baldr_Ki * (baldr_Kp * cmd_t +  cmd_tm1 ) )   #update our DM shape
+    
+    #sig_turb_after = zwfs.detection_chain( input_field[-1] , FPM_on=True)
+    
+    #input_field.append( input_field[-1].applyDM(zwfs.dm) )
+    
+plt.figure()
+plt.imshow( sig_turb.signal)
+
+
+plot_ao_correction_process(wvl_key/(np.pi*2) * ao_1_fields[-1].phase[wvl_key], zwfs.dm.surface, wvl_key/(np.pi*2) * baldr_corrrected_field.phase[wvl_key] , title_list =None)
+    
+plt.figure()
+plt.plot( t_baldr, opd_after, label='after Baldr')
+plt.plot( t_baldr, opd_before , label='before Baldr')
+plt.legend()
+plt.ylabel(f'OPD RMS [rad]  @{round(wvl_key*1e6,1)}um')   
+
+plt.figure()
+plt.plot( t_baldr, strehl_after,'.', label='after Baldr')
+plt.plot( t_baldr, strehl_before ,'.', label='before Baldr')
+plt.legend()
+plt.ylabel(f'Strehl Ratio @{round(wvl_key*1e6,1)}um')    
+
 
 """
 
@@ -457,40 +659,7 @@ ax[2,2].set_title('output intensity 2')
 
 
 #%%
-def plot_ao_correction_process(phase_before, phase_reco, phase_after , title_list =None):
-    """ everything should be input as  micrometer OPD """
-    
-    fig = plt.figure(figsize=(16, 12))
-    
-    ax1 = fig.add_subplot(131)
-    ax1.set_title('phase before',fontsize=20)
-    ax1.axis('off')
-    im1 = ax1.imshow(  phase_before )
-    
-    divider = make_axes_locatable(ax1)
-    cax = divider.append_axes('bottom', size='5%', pad=0.05)
-    cbar = fig.colorbar( im1, cax=cax, orientation='horizontal')
-    cbar.set_label( r'OPD $(\mu m)$', rotation=0)
-    
-    ax2 = fig.add_subplot(132)
-    ax2.set_title('reconstructed phase',fontsize=20)
-    ax2.axis('off')
-    im2 = ax2.imshow( phase_reco )
-    
-    divider = make_axes_locatable(ax2)
-    cax = divider.append_axes('bottom', size='5%', pad=0.05)
-    cbar = fig.colorbar(im2, cax=cax, orientation='horizontal')
-    cbar.set_label( r'OPD $(\mu m)$', rotation=0)
-    
-    ax3 = fig.add_subplot(133)
-    ax3.set_title('Residual',fontsize=20)
-    ax3.axis('off')
-    im3 = ax3.imshow( phase_after ) 
-    
-    divider = make_axes_locatable(ax3)
-    cax = divider.append_axes('bottom', size='5%', pad=0.05)
-    cbar = fig.colorbar(im3, cax=cax, orientation='horizontal')
-    cbar.set_label( r'OPD $(\mu m)$', rotation=0)
+
 
 
 """
