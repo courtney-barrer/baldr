@@ -325,7 +325,7 @@ sig_turb_off = zwfs.detection_chain( ao_1_fields[0] , FPM_on=False) #intensity m
 Nph_obj = np.sum(sig_turb_off.signal) # sum of intensities (#photons) of on sky source with mask out 
 
 
-baldr_Ki = 0.95 #0.75 #0.0
+baldr_Ki = 0.99 #0.75 #0.0
 baldr_Kp = 1.1 #1. #2.
 
 wvl_indx = 7 # wvl to measure telemetry  (ao_1_fields[0].wvl[7] ~ 1.2um)
@@ -367,7 +367,7 @@ for i in range(len(t_baldr)):
     
     # control_matrix @ 1/M * ( sig - M/N * ref_sig )
     modal_reco_list = CM.T @ (  1/Nph_obj * (sig_turb.signal - Nph_obj/Nph_cal * sig_cal_on.signal) ).reshape(-1) #list of amplitudes of the modes measured by the ZWFS
-    modal_gains = -0.9 * S_filt  / np.max(S_filt) * zwfs.control_variables[meth1]['pokeAmp'] # -1 * zwfs.control_variables[meth1]['pokeAmp']* np.ones( len(modal_reco_list) ) # we set the gain by the poke amplitude 
+    modal_gains = -1. * S_filt  / np.max(S_filt) * zwfs.control_variables[meth1]['pokeAmp'] # -1 * zwfs.control_variables[meth1]['pokeAmp']* np.ones( len(modal_reco_list) ) # we set the gain by the poke amplitude 
     dm_reco = np.sum( np.array([ g * a * Z for g,a,Z in  zip(modal_gains,modal_reco_list, control_basis)]) , axis=0)
     
     #dm_reco = np.sum( np.array([ modal_gains[i] * a * Z for i,(a,Z) in enumerate( zip(modal_reco_list, control_basis))]) , axis=0)
