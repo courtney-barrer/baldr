@@ -6,11 +6,14 @@ Created on Thu Mar  2 15:44:21 2023
 @author: bcourtne
 
 baldr functions 2.0
-
+updates
+======
+added initialization of phasemask in focal plane when creating ZWFS object 
+self.FPM.sample_phase_shift_region( nx_pix=self.mode['phasemask']['nx_size_focal_plane'], dx=self.mode['phasemask']['phasemask_diameter']/self.mode['phasemask']['N_samples_across_phase_shift_region'], wvl_2_count_res_elements = np.mean(self.wvls), verbose=True)
 
 To Do
 ======
-there is some factor 10 error in  b or P when A=B=1 for phase estimate
+
 
 
 - tip/tilt vis 
@@ -605,7 +608,67 @@ class zernike_phase_mask:
             
         return( output_field )
     
+    
+    def get_b(self, input_field , wvl_lims=[-np.inf, np.inf] , nx_size_focal_plane = None, dx_focal_plane=None):
+        """
+        get b, part of the the reference field of the ZWFS field (convolution with the phase shift region and the input field)
 
+        Parameters
+        ----------
+        input_field : TYPE
+            DESCRIPTION.
+        wvl_lims : TYPE, optional
+            DESCRIPTION. The default is [-np.inf, np.inf].
+        focal_plane_nx_pix: TYPE, int
+            DESCRIPTION. Number of pixels used to sample focal plane (PSF and phase mask) 
+            when applyiong Fourier transform (mft). Default is None which sets nx_size_focal_plane=input_field.nx_size 
+            (ie.e same grid size as input field)
+        dx_focal_plane: TYPE float
+            DESCRIPTION. pixel scale in focal plane (m/pix). Default is None which sets dx_focal_plane=self.phase_shift_diameter/20 
+            (ie. default is that dx is set so there is 20 pixels over the phase shift region diameter)
+
+
+        Returns
+        -------
+        b (an array of complex values that are the reference field )
+        """
+        
+        b={}
+        if nx_size_focal_plane==None:
+            nx_size_focal_plane = input_field.nx_size
+            
+        if dx_focal_plane==None:
+            dx_focal_plane = self.phase_shift_diameter/10
+
+        # wavelengths defined in the input field 
+        input_wvls = np.array( input_field.wvl )
+
+        #only calculate the output field for the following wvls
+        wvl_filt = (input_wvls <= wvl_lims[1]) & (input_wvls >= wvl_lims[0])
+        wvls = input_wvls[ wvl_filt ]
+        if len(wvls)<1:
+            raise TypeError('\n---no wavelengths defined in input_field.wvl are within the wvl limits (wvl_lims)\n')
+        
+        for w in wvls:
+            
+            # definition of m1 parameter for the Matrix Fourier Transform (MFT)
+            # this should be number of resolution elements across the focal plane grid
+            m1 = (self.x_focal_plane[-1] - self.x_focal_plane[0] ) / (w * self.f_ratio) 
+
+        
+            # --------------------------------
+            # plane B (Focal plane)
+
+            Psi_A = input_field.flux[w] * np.exp(1j * input_field.phase[w])
+            
+            Psi_B = mft.mft(Psi_A, input_field.nx_size, nx_size_focal_plane , m1, cpix=False)
+        
+            b[w] = mft.imft( self.phase_shift_region * Psi_B, nx_size_focal_plane, input_field.nx_size, m1, cpix=False) 
+            
+        return(b)
+    
+    
+    
 class detector:
     
     def __init__(self, npix, pix_scale, DIT = 1, ron=1, QE={w:1 for w in np.linspace(0.9e-6,2e-6,100)}):
@@ -855,6 +918,10 @@ class ZWFS():
         self.mode = mode_dict
         
         self.control_variables = {} # to be filled 
+        
+        # create sample of phase mask in focal plane based on mode dict , this automatically initiates x,y coordinates in focal plane for zwfs.FPM
+        self.FPM.sample_phase_shift_region( nx_pix=self.mode['phasemask']['nx_size_focal_plane'], dx=self.mode['phasemask']['phasemask_diameter']/self.mode['phasemask']['N_samples_across_phase_shift_region'], wvl_2_count_res_elements = np.mean(self.wvls), verbose=True)
+
 
 
     def setup_control_parameters( self, calibration_source_config_dict, N_controlled_modes, modal_basis='zernike', pokeAmp = 50e-9 , label='control_1'):
@@ -883,6 +950,7 @@ class ZWFS():
         self.control_variables[label]['Nph_cal'] = Nph_cal
         self.control_variables[label]['sig_on_ref'] = sig_on
         self.control_variables[label]['sig_off_ref'] = sig_off
+
         
 
         # TO DO
@@ -964,6 +1032,182 @@ class ZWFS():
         return( sig )
     
         
+def baldr_closed_loop(input_screen_fits, zwfs, control_key, Hmag, throughput, Ku, Nint):
+    """
+    re
+
+    Parameters
+    ----------
+    input_screens_fits : TYPE
+        DESCRIPTION.
+    zwfs : TYPE
+        DESCRIPTION.
+    Hmag : TYPE
+        DESCRIPTION.
+    throughput : TYPE
+        DESCRIPTION.
+    control_key : TYPE
+        DESCRIPTION.
+
+    Raises
+    ------
+    TypeError
+        DESCRIPTION.
+
+    Returns
+    -------
+    None.
+
+    """
+    ao_1_screens_fits = fits.open(input_screen_fits)
+    ao_1_screens = np.transpose(np.array([a.data for a in ao_1_screens_fits]) , axes = (1,0,2,3)) # convert indices to t, wvl, x, y
+    # get field wvls (not these may be outside of zwfs.wvls)
+    field_wvls = np.array([float(a.header['HIERARCH wvl[m]']) for a in ao_1_screens_fits])
+    # time of input simulation
+    dt = ao_1_screens_fits[0].header['dt[s]']
+    t = np.arange( 0, ao_1_screens_fits[0].header['HIERARCH iterations'] * dt, dt )
+        
+    Hmag_at_vltiLab = Hmag  - 2.5*np.log10(throughput)
+    flux_at_vltilab = star2photons('H',Hmag_at_vltiLab,airmass=1,k=0.18,ph_m2_s_nm=True) #ph/m2/s/nm
+
+    # simulation time grid for baldr (only need to consider up to integration time)       
+    dt_baldr = zwfs.mode['detector']['DIT']
+    t_baldr = np.arange(0, max(t), dt_baldr)
+    
+    # create interpolation function of first AO stage phase screens, then smear based on difference of baldr dt and first stage AO dt
+    ao_smeared_screens=[]
+    for wvl_indx, w in enumerate( field_wvls ):
+        phase_interp_fn_at_wvl = interp1d(t, np.array( ao_1_screens )[:,wvl_indx ,:,:] , axis = 0)
+        
+        # interpolate onto new grid we min| dt - dt_new| such that dt*N = dt_baldr  for some integer N 
+        N = int( dt_baldr/dt)
+        dt_new = dt_baldr/N
+        t_new = np.arange(min(t), max(t),dt_new)
+        ao_interp_screens = phase_interp_fn_at_wvl(t_new)
+        
+        # then we blur (average) phase over baldr integration time
+        ao_smeared_screens_wvl=[]
+        for i in range(len(t_baldr)):
+            ao_smeared_screens_wvl.append( np.mean(ao_interp_screens[i:i+N],axis=0) )
+        ao_smeared_screens.append(ao_smeared_screens_wvl )
+        
+    ao_smeared_screens = np.transpose(np.array(ao_smeared_screens), axes=(1,0,2,3)) # transpose to put time first axis , wvls second axis 
+    # check 
+    if ao_smeared_screens.shape[0] != len(t_baldr):
+        raise TypeError('new smeared phase screen length does not match length of baldr time series t_baldr')
+     
+        
+    # now convert this to field objects
+    ao_1_fields=[]
+    for i in range(len(t_baldr)):
+        field_i = field(fluxes = [zwfs.pup *flux_at_vltilab for _ in field_wvls], phases =  np.nan_to_num(ao_smeared_screens[i],0), wvls =field_wvls)
+        field_i.define_pupil_grid(dx=zwfs.mode['telescope']['telescope_diameter']/zwfs.mode['telescope']['telescope_diameter_pixels'], D_pix=zwfs.mode['telescope']['telescope_diameter_pixels'])
+        ao_1_fields.append( field_i )
+    # then we should get matching lens between this and t_baldr!!
+    
+        
+    flat_cmd=np.zeros(zwfs.dm.N_act).reshape(-1)
+    zwfs.dm.update_shape( flat_cmd ) 
+    
+    sig_cal_on = zwfs.control_variables[control_key]['sig_on_ref'] #intensity measured on calibration source with phase mask in
+    
+    Nph_cal = zwfs.control_variables[control_key]['Nph_cal'] # sum of intensities (#photons) of calibration source with mask out 
+    
+    IM = zwfs.control_variables[control_key]['IM'] #interaction matrix from calibrationn source 
+    CM = zwfs.control_variables[control_key]['CM'] #control matrix from calibrationn source 
+    control_basis = zwfs.control_variables[control_key]['control_basis'] # DM vcontrol basis used to construct IM
+    
+    U,S,Vt = np.linalg.svd( IM )
+    # look at eigenvalues of IM modes
+    #svd_ax.plot(S,label=meth1)
+    
+    #filter some modes
+    #S_filt = np.array([ s if i<len(S)-30 else 0 for i, s in enumerate(S)  ])
+    S_filt =  np.hstack( (np.ones(len(S)-2) , np.zeros(2) ))
+    # just use at begining of observsation (don't update)
+    sig_turb_off = zwfs.detection_chain( ao_1_fields[-1] , FPM_on=False) #intensity measured on sky with phase mask out
+    
+    Nph_obj = np.sum(sig_turb_off.signal) # sum of intensities (#photons) of on sky source with mask out 
+    
+    """
+    
+    setting PI parameters https://www.zhinst.com/ch/en/resources/principles-of-pid-controllers?gclid=CjwKCAiApaarBhB7EiwAYiMwqi06BUUcq6C11e3tHueyTd7x1DqVrk9gi8xLmtLwUBRCT4nW7EsJnxoCz4oQAvD_BwE&hsa_acc=8252128723&hsa_ad=665555823596&hsa_cam=14165786829&hsa_grp=126330066395&hsa_kw=pid%20controller&hsa_mt=p&hsa_net=adwords&hsa_src=g&hsa_tgt=kwd-354990109332&hsa_ver=3&utm_campaign=PID%20Group&utm_medium=ppc&utm_source=adwords&utm_term=pid%20controller
+    https://apmonitor.com/pdc/index.php/Main/ProportionalIntegralControl#:~:text=Discrete%20PI%20Controller,the%20integral%20of%20the%20error.
+    1. Set the P,I, and D gain to zero
+    2. Increase the proportional (P) gain until the system starts to show consistent and stable oscillation. This value is known as the ultimate gain (Ku).
+    3. Measure the period of the oscillation (Tu).
+    4. Depending on the desired type of control loop (P, PI or PID) set the gains to the following values:
+    
+             	      Kp	Ki	Kd
+    P controller	0.5 Ku	0	0
+    PI controller	0.45 Ku	0.54 Ku / Tu	0
+    PID controller	0.6 Ku	1.2 Ku / Tu	0.075 Ku Tu
+    
+    """
+    Tu = Nint * dt_baldr
+    baldr_Ki = 0.54 * Ku/Tu #0.9    #0.75 #0.0
+    baldr_Kp = 0.45 * Ku #1 #0.45 * Ku # 1.1 #1. #2.
+    
+    #wvl_indx = 7 # wvl to measure telemetry  (ao_1_fields[0].wvl[7] ~ 1.2um)
+    #wvl_key = ao_1_fields[0].wvl[wvl_indx]
+    #on smeared screens
+    #opd_before = np.array( [np.std( p[zwfs.pup >0.5] )  for p in np.array( ao_smeared_screens )[:,wvl_indx,:,:]] )
+    #strehl_before = np.array( [ np.exp(-np.var( p[zwfs.pup >0.5] ))  for p in np.array( ao_smeared_screens )[:,wvl_indx,:,:] ] )
+    
+    #on original screens
+    #opd_before = np.array( [np.nanstd( p[zwfs.pup >0.5] )  for p in np.array( ao_screens )[:,wvl_indx,:,:]] )
+    #strehl_before = np.array( [ np.exp(-np.nanvar( p[zwfs.pup >0.5] ))  for p in np.array( ao_screens )[:,wvl_indx,:,:] ] )
+    
+    
+    #input_field = [ao_1_fields[0]] #
+    cmd = flat_cmd # initial baldr dm to flat 
+    
+    #opd_after = []
+    #strehl_after = []
+    asgard_field = []
+    err = []
+    for i in range(len(t_baldr)):
+            
+        # we apply the current dm shape to the input field coming from first stage AO correction 
+        baldr_corrrected_field = ao_1_fields[i].applyDM(zwfs.dm) 
+        
+        asgard_field.append( baldr_corrrected_field )
+        
+        #we record some telemetry 
+        #opd_after.append(np.std( baldr_corrrected_field.phase[wvl_key][zwfs.pup >0.5]) ) 
+        #strehl_after.append( np.exp(-np.var( baldr_corrrected_field.phase[wvl_key][zwfs.pup >0.5]) ) ) 
+        # we do our wfsing 
+        # first swap our current DM cmd to our last one
+        #cmd_tm1 = cmd
+        
+        #now detect our baldr corrected field 
+        sig_turb = zwfs.detection_chain(baldr_corrrected_field, FPM_on=True)  #intensity measured on sky with phase mask in
+    
+        #plt.imshow(sig_turb.signal)
+        #plt.imshow(input_field.phase[zwfs.wvls[0]])
+        
+        # control_matrix @ 1/M * ( sig - M/N * ref_sig )
+        modal_reco_list = CM.T @ (  1/Nph_obj * (sig_turb.signal - Nph_obj/Nph_cal * sig_cal_on.signal) ).reshape(-1) #list of amplitudes of the modes measured by the ZWFS
+        modal_gains = -1. * S_filt  / np.max(S_filt) * zwfs.control_variables[control_key]['pokeAmp'] # -1 * zwfs.control_variables[meth1]['pokeAmp']* np.ones( len(modal_reco_list) ) # we set the gain by the poke amplitude 
+        reco_residuals = np.sum( np.array([ g * a * Z for g,a,Z in  zip(modal_gains,modal_reco_list, control_basis)]) , axis=0)
+        
+        #dm_reco = np.sum( np.array([ modal_gains[i] * a * Z for i,(a,Z) in enumerate( zip(modal_reco_list, control_basis))]) , axis=0)
+        
+        err.append(  reco_residuals.reshape(-1) ) #new command 
+        if len( err ) < Nint:
+            cmd = baldr_Kp * err[-1] +  baldr_Ki * np.sum( err )*dt_baldr 
+        else:
+            cmd = baldr_Kp * err[-1] +  baldr_Ki * np.sum( err[-Nint:] ,axis =0 ) * dt_baldr 
+        # update dm shape based on our PI controller
+        zwfs.dm.update_shape( zwfs.dm.surface.reshape(-1) + cmd  )   #update our DM shape
+        
+        #sig_turb_after = zwfs.detection_chain( input_field[-1] , FPM_on=True)
+        
+        #input_field.append( input_field[-1].applyDM(zwfs.dm) )
+
+    return( asgard_field, err )
+
+
 
 def init_a_field( Hmag, mode, wvls, pup_geometry, D_pix, dx, r0=0.1, L0=25, phase_scale_factor = 1):
     """
@@ -1675,8 +1919,11 @@ def modal_AO_correction( opd_screens, n_modes, lag, Ki, Kp, V, dx , wvls , wfs_w
         basis = zernike.zernike_basis(nterms=n_modes, npix=npix) # init Zernike basis
         dm_cmd = np.zeros([npix,npix]) # init DM comand 
         
-        if pup==None:
+        if np.sum(pup)==None:
+            print('np.sum(pup)==None, therefore assuming input pupil is disk')
             pup = basis[0]
+        #else:
+        #    raise TypeError('input pup is either None or an input array of the actual pupil. Current pup does not match these cases or types.')
     
         for i in range( it ):
             
@@ -1836,7 +2083,7 @@ def write2fits(screens,wvls, dict4headers, saveAs=None ) :
     Parameters
     ----------
     screens : TYPE. 4D array like (screens[time,wvl,x,y])
-        DESCRIPTION. phase screens 
+        DESCRIPTION. phase screens , should be in rad (try keep convention)
     wvls : TYPE. 1D array like
         DESCRIPTION. wavelengths where phase screens are calculated , must match len(wvls)==screens.shape[1]
     dict4headers : TYPE. dictionary 
@@ -1849,11 +2096,14 @@ def write2fits(screens,wvls, dict4headers, saveAs=None ) :
 
     """
     fits_file = fits.HDUList() 
+    
+    
     for w, wvl in enumerate(wvls):
-
+        
         hdu = fits.PrimaryHDU( np.array( screens )[:,w,:,:] )
         
-        hdu.header.set('what is', 'AO corrected opd screens (m)' , 'at lambda = {0:.4g}um'.format(wvl))
+        hdu.header.set('what is', 'AO corrected phase screens (rad)' , 'at lambda = {0:.4g}um'.format(wvl))
+        hdu.header.set('wvl[m]', wvl)
         for k,v in dict4headers.items():
             hdu.header.set(k, v)
     

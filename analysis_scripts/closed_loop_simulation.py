@@ -23,7 +23,8 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 import scipy 
 import copy
 import aotools
-
+from astropy.io import fits
+import json
 #import zelda
 os.chdir('/Users/bcourtne/Documents/ANU_PHD2/baldr')
 
@@ -66,9 +67,10 @@ def plot_ao_correction_process(phase_before, phase_reco, phase_after , title_lis
     cbar = fig.colorbar(im3, cax=cax, orientation='horizontal')
     cbar.set_label( r'OPD $(\mu m)$', rotation=0)
     
-    
+#%%    now consider dectecting and correcting a turbulent input field in open loop 
 # testing the new configuration formating 
 tel_config =  config.init_telescope_config_dict(use_default_values = True)
+tel_config['pup_geometry']='AT'
 phasemask_config = config.init_phasemask_config_dict(use_default_values = True) 
 DM_config = config.init_DM_config_dict(use_default_values = True) 
 detector_config = config.init_detector_config_dict(use_default_values = True)
@@ -76,6 +78,13 @@ detector_config = config.init_detector_config_dict(use_default_values = True)
 # define a hardware mode for the ZWFS 
 mode_dict = config.create_mode_config_dict( tel_config, phasemask_config, DM_config, detector_config)
 
+# Serializing json
+#json_object = json.dumps(mode_dict, indent=4)
+# Writingfile
+#with open("/Users/bcourtne/Documents/ANU_PHD2/baldr/first_stage_ao_screens/test.json", "w") as outfile:
+#    outfile.write(json_object)
+    
+    
 # init out Baldr ZWFS object with the desired mode 
 zwfs = baldr.ZWFS(mode_dict) 
 
@@ -91,8 +100,6 @@ zwfs.setup_control_parameters(  calibration_source_config_dict, N_controlled_mod
 #add control method using first 20 KL modes
 zwfs.setup_control_parameters(  calibration_source_config_dict, N_controlled_modes=20, modal_basis='KL', pokeAmp = 50e-9 , label='control_20_KL_modes')
 
-
-#%% #---- now consider dectecting and correcting a turbulent input field in open loop 
 
 field_wvls = np.hstack( (np.linspace(0.9e-6,1.3e-6,10), zwfs.wvls ) )
 input_field_0 = [ baldr.init_a_field( Hmag=4, mode='Kolmogorov', wvls=zwfs.wvls, pup_geometry=zwfs.mode['telescope']['pup_geometry'],\
@@ -194,10 +201,98 @@ svd_ax.legend()
 #plt.plot(opd_rms)
 
 
-#%% Full closed loop 
+#%% Full closed loop , first-we simulate first stage ao and save
+fname_id = 'Npix240_1.8m_disk_V50_r00.1_lag25.0_Nmodes7_it200'
+
+
+input_screen_fits =f'/Users/bcourtne/Documents/ANU_PHD2/baldr/phase_screens_first_stage_ao/first_stage_AO_phasescreens_{fname_id}.fits'
+ao_1_screens_fits = fits.open(input_screen_fits)
+
+# setting up the hardware and software modes of our ZWFS
+tel_config =  config.init_telescope_config_dict(use_default_values = True)
+phasemask_config = config.init_phasemask_config_dict(use_default_values = True) 
+DM_config = config.init_DM_config_dict(use_default_values = True) 
+detector_config = config.init_detector_config_dict(use_default_values = True)
+
+# the only thing we need to be compatible is the pupil geometry and Npix, Dpix 
+tel_config['pup_geometry'] = 'disk'
+tel_config['pup_geometry']=ao_1_screens_fits[0].header['PUP_GEOM']
+tel_config['pupil_nx_pixels']=ao_1_screens_fits[0].header['NPIX']
+phasemask_config['nx_size_focal_plane']=ao_1_screens_fits[0].header['NPIX']
+tel_config['telescope_diameter']=ao_1_screens_fits[0].header['HIERARCH diam[m]']
+tel_config['telescope_diameter_pixels']=int(round( ao_1_screens_fits[0].header['HIERARCH diam[m]']/ao_1_screens_fits[0].header['dx[m]'] ) )
+detector_config['pix_scale_det'] = ao_1_screens_fits[0].header['HIERARCH diam[m]']/detector_config['detector_npix']
+detector_config['DIT']  = 0.5e-3 #s
+
+
+ #s
+# define a hardware mode for the ZWFS 
+mode_dict = config.create_mode_config_dict( tel_config, phasemask_config, DM_config, detector_config)
+
+#create our zwfs object
+zwfs = baldr.ZWFS(mode_dict)
+
+# define an internal calibration source 
+calibration_source_config_dict = config.init_calibration_source_config_dict(use_default_values = True)
+calibration_source_config_dict['temperature']=1900 #K (Thorlabs SLS202L/M - Stabilized Tungsten Fiber-Coupled IR Light Source )
+calibration_source_config_dict['calsource_pup_geometry'] = 'disk'
+
+#add control method using first 20 Zernike modes
+zwfs.setup_control_parameters(  calibration_source_config_dict, N_controlled_modes=20, modal_basis='zernike', pokeAmp = 50e-9 , label='control_20_zernike_modes')
+zwfs.setup_control_parameters(  calibration_source_config_dict, N_controlled_modes=30, modal_basis='KL', pokeAmp = 50e-9 , label='control_20_KL_modes')
+
+# do closed loop simulation 
+asgard_field_z20, err_z20 = baldr.baldr_closed_loop(input_screen_fits, zwfs, control_key='control_20_zernike_modes', Hmag=0, throughput=0.01, Ku=1 , Nint=2 )
+asgard_field_kl20, err_kl20 = baldr.baldr_closed_loop(input_screen_fits, zwfs, control_key='control_20_KL_modes', Hmag=0, throughput=0.01, Ku=1 , Nint=2 )
+
+
+wvl_k = asgard_field_kl20[0].wvl[7]
+kwargs={'fontsize':15}
+plt.figure()
+plt.plot( np.linspace(0,detector_config['DIT']*len(asgard_field_z20), len(asgard_field_z20) ), [np.exp(-np.nanvar( asgard_field_z20[i].phase[wvl_k] )) for i in range( len(asgard_field_z20))] ,label='Baldr | 20 Zernike modes')
+plt.plot( np.linspace(0,detector_config['DIT']*len(asgard_field_kl20), len(asgard_field_kl20) ), [np.exp(-np.nanvar( asgard_field_kl20[i].phase[wvl_k] )) for i in range( len(asgard_field_kl20))]  ,label='Baldr | 20 KL modes')
+
+plt.plot( np.linspace(0,len(ao_1_screens_fits[7].data)*ao_1_screens_fits[7].header['HIERARCH dt[s]'], len(ao_1_screens_fits[7].data)) , [np.exp(-np.nanvar(ao_1_screens_fits[7].data[i])) for i in range(len( ao_1_screens_fits[7].data))], label='Naomi')
+plt.legend()
+plt.xlabel('time [s]',**kwargs)
+plt.ylabel(f'Strehl Ratio @ {round(1e6*wvl_k,1)}um',**kwargs)
+
+header_dict={'what':'baldr_closed_loop','first_stage_AO':'naomi/AT', 'dt':0.001, 'Npix':240, 'D':1.8, 'V':50, 'r0':0.1, 'throughput':0.01}
+
+
+#%%
+
+calib_spec = [np.mean(zwfs.control_variables['control_20_zernike_modes']['calibration_field'].flux[k][zwfs.pup>0.5]) for k in zwfs.control_variables['control_20_zernike_modes']['calibration_field'].flux ]
+wvlfilt = (asgard_field[0].wvl>=np.min(zwfs.wvls)) & (asgard_field[0].wvl<=np.max(zwfs.wvls))
+field_spec = np.mean(list(asgard_field[0].flux.values()),axis=(1,2))[wvlfilt] 
+
+plt.plot( zwfs.wvls, calib_spec/np.mean(calib_spec), label='solarstien spectrum (T=1900K)' )
+
+plt.plot( asgard_field[0].wvl[wvlfilt], field_spec/np.mean(field_spec), label='solarstien spectrum (T=)' )
+
+#complex_field_to_write = [[ asgard_field[i].flux[w] * np.exp(1j*asgard_field[i].phase[w] ) for i in range(len(asgard_field)) ] for w in asgard_field[0].wvl]
+#phase_to_write = [[ asgard_field[i].phase[w] for w in asgard_field[0].wvl] for i in range(len(asgard_field)) ]
+
+#baldr.write2fits(screens=phase_to_write  , wvls=asgard_field[0].wvl, dict4headers=header_dict, saveAs=f'/Users/bcourtne/Documents/ANU_PHD2/baldr/baldr_phase_AT_medianATM_faint_1.fits' )
+
+#ATpup = baldr.pick_pupil('AT',dim=zwfs.mode['telescope']['pupil_nx_pixels'], diameter=zwfs.mode['telescope']['pupil_nx_pixels'])
+#amp_to_write = [[ ATpup *asgard_field[i].flux[w] for w in asgard_field[0].wvl] for i in range(len(asgard_field))] 
+#baldr.write2fits(screens=amp_to_write  , wvls=asgard_field[0].wvl, dict4headers=header_dict, saveAs=f'/Users/bcourtne/Documents/ANU_PHD2/baldr/baldr_amp_AT_medianATM_faint_1.fits' )
+
+#baldr.pick_pupil('AT',dim=zwfs.mode['telescope']['pupil_nx_pixels'], diameter=zwfs.mode['telescope']['pupil_nx_pixels'])
+
+
+#%% Full closed loop , first-we simulate first stage ao and save
+# input phase screens,dt, zwfs,Hmag , throuput , control_label
+
+"""
+we run this in part now in bcourtne@chapman3:/home/bcourtne/baldr/first_stage_ao_simulation.py
+
 
 #----------------
 # Parameters 
+pup_geom = zwfs.mode['telescope']['pup_geometry']
+diam = zwfs.mode['telescope']['telescope_diameter']
 r0 = 0.1 #m , defined at 500nm 
 L0 = 25 #m
 V=50 #50
@@ -207,15 +302,22 @@ throughput = 0.01
 Hmag = 0
 Hmag_at_vltiLab = Hmag  - 2.5*np.log10(throughput)
 flux_at_vltilab = baldr.star2photons('H',Hmag_at_vltiLab,airmass=1,k=0.18,ph_m2_s_nm=True) #ph/m2/s/nm
+dx = zwfs.mode['telescope']['telescope_diameter']/zwfs.mode['telescope']['telescope_diameter_pixels']
+dt = dx / V # = dx/V - sample time of first stage AO sim
+Npix = zwfs.mode['telescope']['telescope_diameter_pixels']
+it = 250 # iterations 
 
-dt = (zwfs.mode['telescope']['telescope_diameter']/zwfs.mode['telescope']['telescope_diameter_pixels']) / V # = dx/V - sample time of first stage AO sim
+# control parameters 
+Ki_1 = .95 # integrator
+Kp_1 = 1.1 #proportional
+n_modes = 7 
+first_stage_ao_dict = {'pup_geom':pup_geom,'diam[m]':diam, 'dt':dt,'dx':dx,'Npix':Npix , 'iterations':250,'n_modes_controlled':n_modes,'V[m/s]':V,'r0[m]':r0,'L0[m]':L0,'latency[s]':lag1,'wvl0_wfs[m]':naomi_wvl,'Ki':Ki_1, 'Kp':Kp_1}
 
-it = 500 # iterations 
 
+# 
+field_wvls = np.hstack( (np.linspace(0.9e-6,1.3e-6,10), zwfs.wvls ) ) # field wavelengths to run the simulaiton for 
 
 t = np.arange(0, it*dt, dt)
-
-field_wvls = np.hstack( (np.linspace(0.9e-6,1.3e-6,10), zwfs.wvls ) ) # field wavelengths to run the simulaiton for 
 
 seed_phase_screen =  aotools.turbulence.infinitephasescreen.PhaseScreenVonKarman(nx_size = zwfs.mode['telescope']['telescope_diameter_pixels'], pixel_scale=zwfs.mode['telescope']['telescope_diameter']/zwfs.mode['telescope']['telescope_diameter_pixels'],\
                 r0=r0 , L0=L0, n_columns=2,random_seed = 1)
@@ -227,16 +329,93 @@ seed_phase_screen =  aotools.turbulence.infinitephasescreen.PhaseScreenVonKarman
 #----------------
 # First Stage AO 
 phase_screen = copy.copy( seed_phase_screen ) # copy the seed screen 
-ao_screens = baldr.modal_AO_correction( phase_screen, n_modes=7, lag=lag1, Ki=.95, Kp=1.1, V=V, \
-                                       dx=zwfs.mode['telescope']['telescope_diameter']/zwfs.mode['telescope']['telescope_diameter_pixels'] , \
-                                           wvls=field_wvls , wfs_wvl=naomi_wvl, it=it, pup= None) #OPD in meters
+ao_screens = baldr.modal_AO_correction( phase_screen, n_modes=7, lag=lag1, Ki=Ki_1, Kp=Kp_1, V=V, \
+                                       dx=dx , wvls=field_wvls , wfs_wvl=naomi_wvl, it=it, pup = zwfs.pup) #OPD in meters
 #convert OPD to radians
 ao_screens = [[2*np.pi/w * p for p,w in zip(ao_screens[i], field_wvls)] for i in range(len(ao_screens))]
 
-
 # write to fits with r0, L0, V, lag1, naomi_wvl, dt, it, 
 
-# then read in , create t from dt, it
+baldr.write2fits(screens=ao_screens, wvls=field_wvls, dict4headers=first_stage_ao_dict, saveAs=f'/Users/bcourtne/Documents/ANU_PHD2/baldr/first_stage_AO_phasescreens_{diam}m_{pup_geom}_V{V}_r0{r0}_lag{lag1}_Nmodes{n_modes}.fits' )
+"""
+
+#READ IN FIRST STAGE AO , create a t grid from dt, and #iternations for baldr screens + smearing according to baldr DIT 
+throughput = 0.01
+Hmag = 0
+Hmag_at_vltiLab = Hmag  - 2.5*np.log10(throughput)
+flux_at_vltilab = baldr.star2photons('H',Hmag_at_vltiLab,airmass=1,k=0.18,ph_m2_s_nm=True) #ph/m2/s/nm
+
+
+path_ao_1 = '/Users/bcourtne/Documents/ANU_PHD2/baldr/first_stage_ao_screens/'
+
+fname_id = 'Npix240_1.8m_disk_V50_r00.1_lag25.0_Nmodes7_it200' #'Npix120_1.8m_AT_V50_r00.1_lag6.0_Nmodes7'
+
+# read in phase screens 
+ao_1_screens_fits = fits.open(os.path.join(path_ao_1 ,f'first_stage_AO_phasescreens_{fname_id}.fits' ))
+
+ao_1_screens = np.transpose(np.array([a.data for a in ao_1_screens_fits]) , axes = (1,0,2,3)) # convert indices to t, wvl, x, y
+
+
+# get field wvls (not these may be outside of zwfs.wvls)
+field_wvls = np.array([float(a.header['HIERARCH wvl[m]']) for a in ao_1_screens_fits])
+
+#field_wvls[15]
+#Out[130]: 1.622222222222222e-06
+plt.figure()
+plt.plot( [np.exp( -np.nanvar( ao_1_screens[i][15] )) for i in range(len(ao_1_screens))] ) 
+# time of input simulation
+dt = ao_1_screens_fits[0].header['dt[s]']
+t = np.arange( 0, ao_1_screens_fits[0].header['HIERARCH iterations'] * dt, dt )
+#t =  np.arange( 0, 1000 * dt, dt )
+# read in relevant ZWFS mode that corresponds to phase screens 
+#with open(f'/Users/bcourtne/Documents/ANU_PHD2/baldr/first_stage_ao_screens/zwfs_mode_{ao_1_file}.json', 'r') as openfile:
+#    # Reading from json file
+#    mode_dict = json.load(openfile)   
+
+# setting up the hardware and software modes of our ZWFS
+tel_config =  config.init_telescope_config_dict(use_default_values = True)
+phasemask_config = config.init_phasemask_config_dict(use_default_values = True) 
+DM_config = config.init_DM_config_dict(use_default_values = True) 
+detector_config = config.init_detector_config_dict(use_default_values = True)
+
+# the only thing we need to be compatible is the pupil geometry and Npix, Dpix 
+tel_config['pup_geometry']=ao_1_screens_fits[0].header['PUP_GEOM']
+tel_config['pupil_nx_pixels']=ao_1_screens_fits[0].header['NPIX']
+phasemask_config['nx_size_focal_plane']=ao_1_screens_fits[0].header['NPIX']
+tel_config['telescope_diameter']=ao_1_screens_fits[0].header['HIERARCH diam[m]']
+tel_config['telescope_diameter_pixels']=int(round( ao_1_screens_fits[0].header['HIERARCH diam[m]']/ao_1_screens_fits[0].header['dx[m]'] ) )
+detector_config['pix_scale_det'] = ao_1_screens_fits[0].header['HIERARCH diam[m]']/detector_config['detector_npix']
+
+# define a hardware mode for the ZWFS 
+mode_dict = config.create_mode_config_dict( tel_config, phasemask_config, DM_config, detector_config)
+
+#create our zwfs object
+zwfs = baldr.ZWFS(mode_dict)
+zwfs.FPM.sample_phase_shift_region(nx_pix=zwfs.mode['phasemask']['nx_size_focal_plane'], dx=zwfs.mode['phasemask']['phasemask_diameter']/zwfs.mode['phasemask']['N_samples_across_phase_shift_region'], wvl_2_count_res_elements = 1.65e-6, verbose=True)
+
+#zwfs.FPM.sample_phase_shift_region(nx_pix=zwfs.mode['phasemask']['nx_size_focal_plane'], dx=zwfs.mode['telescope']['telescope_diameter']/phasemask_config['nx_size_focal_plane'], wvl_2_count_res_elements = 1.65e-6, verbose=True)
+
+# define an internal calibration source 
+calibration_source_config_dict = config.init_calibration_source_config_dict(use_default_values = True)
+
+#define what modal basis, and how many how many modes to control, then use internal calibration source to create interaction matrices 
+#and setup control parameters of ZWFS
+
+#add control method using first 20 Zernike modes
+zwfs.setup_control_parameters(  calibration_source_config_dict, N_controlled_modes=20, modal_basis='zernike', pokeAmp = 50e-9 , label='control_20_zernike_modes')
+zwfs.setup_control_parameters(  calibration_source_config_dict, N_controlled_modes=30, modal_basis='zernike', pokeAmp = 50e-9 , label='control_30_zernike_modes')
+zwfs.setup_control_parameters(  calibration_source_config_dict, N_controlled_modes=30, modal_basis='KL', pokeAmp = 50e-9 , label='control_30_KL_modes')
+#add control method using first 20 KL modes
+zwfs.setup_control_parameters(  calibration_source_config_dict, N_controlled_modes=20, modal_basis='KL', pokeAmp = 50e-9 , label='control_20_KL_modes')
+
+# to see the modes on the detector 
+#plt.imshow( np.array( zwfs.control_variables['control_70_zernike_modes']['IM'] )[-1].reshape(12,12) )
+
+# quick look at strehls 
+plt.figure()
+plt.plot( [np.exp(-np.nanvar(ao_1_screens[i][-1])) for i in range(len(ao_1_screens))] )
+#%%
+
 
 # convert fits phase screens to field objects to pass through zwfs 
 #  if first stage sampling is less than Baldr dit I average the phase over Baldr DIT I have to average phase over 
@@ -246,7 +425,7 @@ t_baldr = np.arange(0, max(t), dt_baldr)
 # create interpolation function of first AO stage phase screens, then smear based on difference of baldr dt and first stage AO dt
 ao_smeared_screens=[]
 for wvl_indx, w in enumerate( field_wvls ):
-    phase_interp_fn_at_wvl = interp1d(t, np.array( ao_screens)[:,wvl_indx ,:,:] , axis = 0)
+    phase_interp_fn_at_wvl = interp1d(t, np.array( ao_1_screens )[:,wvl_indx ,:,:] , axis = 0)
     
     # interpolate onto new grid we min| dt - dt_new| such that dt*N = dt_baldr  for some integer N 
     N = int( dt_baldr/dt)
@@ -283,8 +462,8 @@ plt.imshow(ao_1_fields[0].phase[zwfs.wvls[0]])
 #no_AO_screen = copy.copy( seed_phase_screen ) 
 
 # lets see what it looks like
-after_strehl_0 =  np.array( [np.exp( -np.nanvar(  p ) ) for p in np.array( ao_screens )[:,0,:,:]] )
-after_strehl_1 =  np.array( [np.exp( -np.nanvar( p ) ) for p in np.array( ao_screens )[:,-1,:,:]] )
+after_strehl_0 =  np.array( [np.exp( -np.nanvar(  p ) ) for p in np.array( ao_1_screens )[:,0,:,:]] )
+after_strehl_1 =  np.array( [np.exp( -np.nanvar( p ) ) for p in np.array( ao_1_screens )[:,-1,:,:]] )
 plt.figure()
 plt.plot( after_strehl_0 ,label=f'{round(field_wvls[0]*1e6,2)}um') ; plt.plot( after_strehl_1, label=f'{round(field_wvls[-1]*1e6,2)}um')
 plt.legend()
@@ -294,11 +473,39 @@ plt.xlabel('simulation iteration')
 
 
 
-
 #%% NOW DOING FULL CLOSED LOOPWITH BALDR AFTER §1ST STAGE AO
 
+"""
+with ('control_20_zernike_modes') 20 zernike modes works best only filtering 1 mode with unity gain for all other modes, Ki~0.99, Kp~1.1. Strehl @ 1.2um goes from 0.1 pre-baldr to 0.4 post baldr
+with 'control_20_KL_modes' we maybe do slightly better with same parameters as 'control_20_zernike_modes'
+marginal ~0.1 rad rms gain using 'control_70_zernike_modes' we get to more like 50% Strehl @ 1.2um
+
+I should try with individual actuators analytic reconstruction 
+
+# I need to do this but manually reduce the field_wvls used!!!
+aaa=zwfs.FPM.get_output_field(ao_1_fields[-1], keep_intermediate_products=True)
+b = zwfs.FPM.b # list of 20 wvls
+#convert to field 
+b_field = baldr.field(phases=np.array([np.angle(p) for p in zwfs.FPM.b ]), fluxes=np.array([abs(p) for p in zwfs.FPM.b ]) , wvls=field_wvls)
+b_field.define_pupil_grid(dx=ao_1_fields[0].dx , D_pix = int(ao_1_fields[0].D_pix) )
+reco_field = baldr.reco( ao_1_fields[i], SIG=zwfs.detection_chain(ao_1_fields[i], FPM_on=True), SIG_CAL=zwfs.detection_chain(ao_1_fields[i], FPM_on=False), FPM=zwfs.FPM, DET=zwfs.det, b=b_field, order='first')
+plt.imshow( reco_field )
+
+plt.imshow( np.repeat(np.repeat( reco_field,repeats = 20, axis=0),repeats = 20,axis=1) )
+
+np.nanstd( zwfs.pup * ( np.repeat(np.repeat( reco_field,repeats = 20, axis=0),repeats = 20,axis=1) - ao_1_fields[-1].phase[zwfs.wvls[-1]]) )
+
+"""
+
+b = zwfs.FPM.get_b(ao_1_fields[-1])
+b_field = baldr.field(phases=np.array([np.angle(p) for p in zwfs.FPM.b ]), fluxes=np.array([abs(p) for p in zwfs.FPM.b ]) , wvls=field_wvls)
+b_field.define_pupil_grid(dx=ao_1_fields[0].dx , D_pix = int(ao_1_fields[0].D_pix) )
+reco_field = baldr.reco( ao_1_fields[i], SIG=zwfs.detection_chain(ao_1_fields[i], FPM_on=True), SIG_CAL=zwfs.detection_chain(ao_1_fields[i], FPM_on=False), FPM=zwfs.FPM, DET=zwfs.det, b=b_field, order='first')
+
+
+#%%
 # need to get dt from 1st stage ao simulation then just repeat the screens to get the appropiate simulation dt time for baldr simulation 
-meth1 = 'control_20_zernike_modes' #zwfs.control_variables
+meth1 = 'control_20_zernike_modes' #'control_20_KL_modes' #'control_20_zernike_modes' #zwfs.control_variables
 ## now do closed loop 
 #begin with flat DM
 flat_cmd=np.zeros(zwfs.dm.N_act).reshape(-1)
@@ -314,19 +521,37 @@ control_basis = zwfs.control_variables[meth1]['control_basis'] # DM vcontrol bas
 
 U,S,Vt = np.linalg.svd( IM )
 # look at eigenvalues of IM modes
-svd_ax.plot(S,label=meth1)
+#svd_ax.plot(S,label=meth1)
 
 #filter some modes
-S_filt = np.array([ s if i<len(S)-2 else 0 for i, s in enumerate(S)  ])
- 
+#S_filt = np.array([ s if i<len(S)-30 else 0 for i, s in enumerate(S)  ])
+S_filt =  np.hstack( (np.ones(len(S)-2) , np.zeros(2) ))
 # just use at begining of observsation (don't update)
-sig_turb_off = zwfs.detection_chain( ao_1_fields[0] , FPM_on=False) #intensity measured on sky with phase mask out
+sig_turb_off = zwfs.detection_chain( ao_1_fields[-1] , FPM_on=False) #intensity measured on sky with phase mask out
 
 Nph_obj = np.sum(sig_turb_off.signal) # sum of intensities (#photons) of on sky source with mask out 
 
+"""
 
-baldr_Ki = 0.99 #0.75 #0.0
-baldr_Kp = 1.1 #1. #2.
+setting PI parameters https://www.zhinst.com/ch/en/resources/principles-of-pid-controllers?gclid=CjwKCAiApaarBhB7EiwAYiMwqi06BUUcq6C11e3tHueyTd7x1DqVrk9gi8xLmtLwUBRCT4nW7EsJnxoCz4oQAvD_BwE&hsa_acc=8252128723&hsa_ad=665555823596&hsa_cam=14165786829&hsa_grp=126330066395&hsa_kw=pid%20controller&hsa_mt=p&hsa_net=adwords&hsa_src=g&hsa_tgt=kwd-354990109332&hsa_ver=3&utm_campaign=PID%20Group&utm_medium=ppc&utm_source=adwords&utm_term=pid%20controller
+https://apmonitor.com/pdc/index.php/Main/ProportionalIntegralControl#:~:text=Discrete%20PI%20Controller,the%20integral%20of%20the%20error.
+1. Set the P,I, and D gain to zero
+2. Increase the proportional (P) gain until the system starts to show consistent and stable oscillation. This value is known as the ultimate gain (Ku).
+3. Measure the period of the oscillation (Tu).
+4. Depending on the desired type of control loop (P, PI or PID) set the gains to the following values:
+
+         	      Kp	Ki	Kd
+P controller	0.5 Ku	0	0
+PI controller	0.45 Ku	0.54 Ku / Tu	0
+PID controller	0.6 Ku	1.2 Ku / Tu	0.075 Ku Tu
+
+"""
+Ku = 1. #0.8 
+N_int = 2 #3
+Tu = N_int * dt_baldr
+baldr_Ki = 0.54 * Ku/Tu #0.9    #0.75 #0.0
+baldr_Kp = 0.45 * Ku #1 #0.45 * Ku # 1.1 #1. #2.
+
 
 wvl_indx = 7 # wvl to measure telemetry  (ao_1_fields[0].wvl[7] ~ 1.2um)
 wvl_key = ao_1_fields[0].wvl[wvl_indx]
@@ -345,6 +570,7 @@ cmd = flat_cmd # initial baldr dm to flat
 opd_after = []
 strehl_after = []
 asgard_field = []
+err = []
 for i in range(len(t_baldr)):
         
     # we apply the current dm shape to the input field coming from first stage AO correction 
@@ -357,7 +583,7 @@ for i in range(len(t_baldr)):
     strehl_after.append( np.exp(-np.var( baldr_corrrected_field.phase[wvl_key][zwfs.pup >0.5]) ) ) 
     # we do our wfsing 
     # first swap our current DM cmd to our last one
-    cmd_tm1 = cmd
+    #cmd_tm1 = cmd
     
     #now detect our baldr corrected field 
     sig_turb = zwfs.detection_chain(baldr_corrrected_field, FPM_on=True)  #intensity measured on sky with phase mask in
@@ -368,19 +594,32 @@ for i in range(len(t_baldr)):
     # control_matrix @ 1/M * ( sig - M/N * ref_sig )
     modal_reco_list = CM.T @ (  1/Nph_obj * (sig_turb.signal - Nph_obj/Nph_cal * sig_cal_on.signal) ).reshape(-1) #list of amplitudes of the modes measured by the ZWFS
     modal_gains = -1. * S_filt  / np.max(S_filt) * zwfs.control_variables[meth1]['pokeAmp'] # -1 * zwfs.control_variables[meth1]['pokeAmp']* np.ones( len(modal_reco_list) ) # we set the gain by the poke amplitude 
-    dm_reco = np.sum( np.array([ g * a * Z for g,a,Z in  zip(modal_gains,modal_reco_list, control_basis)]) , axis=0)
+    reco_residuals = np.sum( np.array([ g * a * Z for g,a,Z in  zip(modal_gains,modal_reco_list, control_basis)]) , axis=0)
     
     #dm_reco = np.sum( np.array([ modal_gains[i] * a * Z for i,(a,Z) in enumerate( zip(modal_reco_list, control_basis))]) , axis=0)
     
-    opd_est = dm_reco.reshape(-1) #new command 
-    cmd = baldr_Ki * (baldr_Kp * opd_est +  cmd_tm1 )
+    err.append(  reco_residuals.reshape(-1) ) #new command 
+    if len( err ) < N_int:
+        cmd = baldr_Kp * err[-1] +  baldr_Ki * np.sum( err )*dt_baldr 
+    else:
+        cmd = baldr_Kp * err[-1] +  baldr_Ki * np.sum( err[-N_int:] ,axis =0 ) * dt_baldr 
     # update dm shape based on our PI controller
-    zwfs.dm.update_shape( cmd ) #baldr_Ki * (baldr_Kp * cmd_t +  cmd_tm1 ) )   #update our DM shape
+    zwfs.dm.update_shape( zwfs.dm.surface.reshape(-1) + cmd  )   #update our DM shape
     
     #sig_turb_after = zwfs.detection_chain( input_field[-1] , FPM_on=True)
     
     #input_field.append( input_field[-1].applyDM(zwfs.dm) )
-    
+
+plt.figure()
+plt.ylabel('error')
+plt.plot( np.sum(err,axis=1))
+
+#scrns2save = [list(asgard_field[i].phase.values()) for i in range(len(asgard_field))]
+#dict4headers = {'V':V,'r0':r0,'L0':L0} 
+#baldr.write2fits(screens=scrns2save, wvls=field_wvls, dict4headers=dict4headers, saveAs='/Users/bcourtne/Documents/ANU_PHD2/baldr/test.fits' )
+
+#plt.imshow( abs( baldr.mft.mft( (baldr.mft.mft(zwfs.pup, zwfs.mode['telescope']['pupil_nx_pixels'], zwfs.mode['phasemask']['nx_size_focal_plane'] , m1, cpix=False) ),zwfs.mode['phasemask']['nx_size_focal_plane'], zwfs.mode['telescope']['pupil_nx_pixels'],m1,cpix=False ) ) )
+
 plt.figure()
 plt.imshow( sig_turb.signal)
 
