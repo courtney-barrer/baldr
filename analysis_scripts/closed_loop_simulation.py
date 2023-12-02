@@ -238,25 +238,28 @@ calibration_source_config_dict['temperature']=1900 #K (Thorlabs SLS202L/M - Stab
 calibration_source_config_dict['calsource_pup_geometry'] = 'disk'
 
 #add control method using first 20 Zernike modes
-zwfs.setup_control_parameters(  calibration_source_config_dict, N_controlled_modes=20, modal_basis='zernike', pokeAmp = 50e-9 , label='control_20_zernike_modes')
-zwfs.setup_control_parameters(  calibration_source_config_dict, N_controlled_modes=30, modal_basis='KL', pokeAmp = 50e-9 , label='control_20_KL_modes')
+#zwfs.setup_control_parameters(  calibration_source_config_dict, N_controlled_modes=20, modal_basis='zernike', pokeAmp = 50e-9 , label='control_20_zernike_modes')
+zwfs.setup_control_parameters(  calibration_source_config_dict, N_controlled_modes=20, modal_basis='KL', pokeAmp = 50e-9 , label='control_20_KL_modes')
+#zwfs.setup_control_parameters(  calibration_source_config_dict, N_controlled_modes=40, modal_basis='KL', pokeAmp = 50e-9 , label='control_40_KL_modes')
+zwfs.setup_control_parameters(  calibration_source_config_dict, N_controlled_modes=70, modal_basis='KL', pokeAmp = 50e-9 , label='control_70_KL_modes')
 
 # do closed loop simulation 
-asgard_field_z20, err_z20 = baldr.baldr_closed_loop(input_screen_fits, zwfs, control_key='control_20_zernike_modes', Hmag=0, throughput=0.01, Ku=1 , Nint=2 )
 asgard_field_kl20, err_kl20 = baldr.baldr_closed_loop(input_screen_fits, zwfs, control_key='control_20_KL_modes', Hmag=0, throughput=0.01, Ku=1 , Nint=2 )
-
+#asgard_field_kl40, err_kl40 = baldr.baldr_closed_loop(input_screen_fits, zwfs, control_key='control_40_KL_modes', Hmag=0, throughput=0.01, Ku=1 , Nint=2 )
+asgard_field_kl70, err_kl70 = baldr.baldr_closed_loop(input_screen_fits, zwfs, control_key='control_70_KL_modes', Hmag=0, throughput=0.01, Ku=1 , Nint=2 )
 
 wvl_k = asgard_field_kl20[0].wvl[7]
 kwargs={'fontsize':15}
 plt.figure()
-plt.plot( np.linspace(0,detector_config['DIT']*len(asgard_field_z20), len(asgard_field_z20) ), [np.exp(-np.nanvar( asgard_field_z20[i].phase[wvl_k] )) for i in range( len(asgard_field_z20))] ,label='Baldr | 20 Zernike modes')
-plt.plot( np.linspace(0,detector_config['DIT']*len(asgard_field_kl20), len(asgard_field_kl20) ), [np.exp(-np.nanvar( asgard_field_kl20[i].phase[wvl_k] )) for i in range( len(asgard_field_kl20))]  ,label='Baldr | 20 KL modes')
+plt.plot( np.linspace(0,detector_config['DIT']*len(asgard_field_kl20), len(asgard_field_kl20) ), [np.exp(-np.nanvar( asgard_field_kl20[i].phase[wvl_k] )) for i in range( len(asgard_field_kl20))] ,label='Baldr | 20 KL modes')
+#plt.plot( np.linspace(0,detector_config['DIT']*len(asgard_field_kl40), len(asgard_field_kl40) ), [np.exp(-np.nanvar( asgard_field_kl40[i].phase[wvl_k] )) for i in range( len(asgard_field_kl40))]  ,label='Baldr | 40 KL modes')
+plt.plot( np.linspace(0,detector_config['DIT']*len(asgard_field_kl70), len(asgard_field_kl70) ), [np.exp(-np.nanvar( asgard_field_kl70[i].phase[wvl_k] )) for i in range( len(asgard_field_kl70))]  ,label='Baldr | 70 KL modes')
 
 plt.plot( np.linspace(0,len(ao_1_screens_fits[7].data)*ao_1_screens_fits[7].header['HIERARCH dt[s]'], len(ao_1_screens_fits[7].data)) , [np.exp(-np.nanvar(ao_1_screens_fits[7].data[i])) for i in range(len( ao_1_screens_fits[7].data))], label='Naomi')
 plt.legend()
 plt.xlabel('time [s]',**kwargs)
 plt.ylabel(f'Strehl Ratio @ {round(1e6*wvl_k,1)}um',**kwargs)
-
+plt.gca().tick_params(labelsizze=kwargs['fontsize'])
 header_dict={'what':'baldr_closed_loop','first_stage_AO':'naomi/AT', 'dt':0.001, 'Npix':240, 'D':1.8, 'V':50, 'r0':0.1, 'throughput':0.01}
 
 
