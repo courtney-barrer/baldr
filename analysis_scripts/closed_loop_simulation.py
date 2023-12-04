@@ -219,6 +219,9 @@ tel_config['pup_geometry'] = 'disk'
 tel_config['pup_geometry']=ao_1_screens_fits[0].header['PUP_GEOM']
 tel_config['pupil_nx_pixels']=ao_1_screens_fits[0].header['NPIX']
 phasemask_config['nx_size_focal_plane']=ao_1_screens_fits[0].header['NPIX']
+
+#phasemask_config['phasemask_diameter'] = phasemask_config['phasemask_diameter'] * 1.9
+
 tel_config['telescope_diameter']=ao_1_screens_fits[0].header['HIERARCH diam[m]']
 tel_config['telescope_diameter_pixels']=int(round( ao_1_screens_fits[0].header['HIERARCH diam[m]']/ao_1_screens_fits[0].header['dx[m]'] ) )
 detector_config['pix_scale_det'] = ao_1_screens_fits[0].header['HIERARCH diam[m]']/detector_config['detector_npix']
@@ -234,21 +237,24 @@ zwfs = baldr.ZWFS(mode_dict)
 
 # define an internal calibration source 
 calibration_source_config_dict = config.init_calibration_source_config_dict(use_default_values = True)
-calibration_source_config_dict['temperature']=1900 #K (Thorlabs SLS202L/M - Stabilized Tungsten Fiber-Coupled IR Light Source )
+calibration_source_config_dict['temperature']=9000 #K (Thorlabs SLS202L/M - Stabilized Tungsten Fiber-Coupled IR Light Source )
 calibration_source_config_dict['calsource_pup_geometry'] = 'disk'
 
 #add control method using first 20 Zernike modes
 #zwfs.setup_control_parameters(  calibration_source_config_dict, N_controlled_modes=20, modal_basis='zernike', pokeAmp = 50e-9 , label='control_20_zernike_modes')
+
 zwfs.setup_control_parameters(  calibration_source_config_dict, N_controlled_modes=20, modal_basis='KL', pokeAmp = 50e-9 , label='control_20_KL_modes')
 #zwfs.setup_control_parameters(  calibration_source_config_dict, N_controlled_modes=40, modal_basis='KL', pokeAmp = 50e-9 , label='control_40_KL_modes')
 zwfs.setup_control_parameters(  calibration_source_config_dict, N_controlled_modes=70, modal_basis='KL', pokeAmp = 50e-9 , label='control_70_KL_modes')
 
 # do closed loop simulation 
-asgard_field_kl20, err_kl20 = baldr.baldr_closed_loop(input_screen_fits, zwfs, control_key='control_20_KL_modes', Hmag=0, throughput=0.01, Ku=1 , Nint=2 )
-#asgard_field_kl40, err_kl40 = baldr.baldr_closed_loop(input_screen_fits, zwfs, control_key='control_40_KL_modes', Hmag=0, throughput=0.01, Ku=1 , Nint=2 )
-asgard_field_kl70, err_kl70 = baldr.baldr_closed_loop(input_screen_fits, zwfs, control_key='control_70_KL_modes', Hmag=0, throughput=0.01, Ku=1 , Nint=2 )
+t_bald, asgard_field_kl20, err_kl20, DM_shape_kl20, detector_signal_kl20 = baldr.baldr_closed_loop(input_screen_fits, zwfs, control_key='control_20_KL_modes', Hmag=0, throughput=0.01, Ku=1 , Nint=2 ,return_intermediate_products=True)
+#t_bald, asgard_field_kl20, err_kl20 = baldr.baldr_closed_loop(input_screen_fits, zwfs, control_key='control_20_KL_modes', Hmag=0, throughput=0.01, Ku=1 , Nint=2 ,return_intermediate_products=False)
+#t_bald, asgard_field_kl40, err_kl40 = baldr.baldr_closed_loop(input_screen_fits, zwfs, control_key='control_40_KL_modes', Hmag=0, throughput=0.01, Ku=1 , Nint=2 ,return_intermediate_products=False)
+#t_bald, asgard_field_kl70, err_kl70 = baldr.baldr_closed_loop(input_screen_fits, zwfs, control_key='control_70_KL_modes', Hmag=0, throughput=0.01, Ku=1 , Nint=2 ,return_intermediate_products=False)
 
-wvl_k = asgard_field_kl20[0].wvl[7]
+#%%
+wvl_k = asgard_field_kl70[0].wvl[7]
 kwargs={'fontsize':15}
 plt.figure()
 plt.plot( np.linspace(0,detector_config['DIT']*len(asgard_field_kl20), len(asgard_field_kl20) ), [np.exp(-np.nanvar( asgard_field_kl20[i].phase[wvl_k] )) for i in range( len(asgard_field_kl20))] ,label='Baldr | 20 KL modes')
@@ -260,18 +266,8 @@ plt.legend()
 plt.xlabel('time [s]',**kwargs)
 plt.ylabel(f'Strehl Ratio @ {round(1e6*wvl_k,1)}um',**kwargs)
 plt.gca().tick_params(labelsizze=kwargs['fontsize'])
+
 header_dict={'what':'baldr_closed_loop','first_stage_AO':'naomi/AT', 'dt':0.001, 'Npix':240, 'D':1.8, 'V':50, 'r0':0.1, 'throughput':0.01}
-
-
-#%%
-
-calib_spec = [np.mean(zwfs.control_variables['control_20_zernike_modes']['calibration_field'].flux[k][zwfs.pup>0.5]) for k in zwfs.control_variables['control_20_zernike_modes']['calibration_field'].flux ]
-wvlfilt = (asgard_field[0].wvl>=np.min(zwfs.wvls)) & (asgard_field[0].wvl<=np.max(zwfs.wvls))
-field_spec = np.mean(list(asgard_field[0].flux.values()),axis=(1,2))[wvlfilt] 
-
-plt.plot( zwfs.wvls, calib_spec/np.mean(calib_spec), label='solarstien spectrum (T=1900K)' )
-
-plt.plot( asgard_field[0].wvl[wvlfilt], field_spec/np.mean(field_spec), label='solarstien spectrum (T=)' )
 
 #complex_field_to_write = [[ asgard_field[i].flux[w] * np.exp(1j*asgard_field[i].phase[w] ) for i in range(len(asgard_field)) ] for w in asgard_field[0].wvl]
 #phase_to_write = [[ asgard_field[i].phase[w] for w in asgard_field[0].wvl] for i in range(len(asgard_field)) ]
@@ -284,6 +280,92 @@ plt.plot( asgard_field[0].wvl[wvlfilt], field_spec/np.mean(field_spec), label='s
 
 #baldr.pick_pupil('AT',dim=zwfs.mode['telescope']['pupil_nx_pixels'], diameter=zwfs.mode['telescope']['pupil_nx_pixels'])
 
+
+#%% make animation , show input screen before baldr, DM , after baldr screen, Detector, strehls
+
+
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+  
+"""inner = [['innerA'],
+         ['innerB']]
+outer = [['upper left',  inner],
+          ['lower left', 'lower right']]"""
+
+wvl_i = 0 # wvls[0] = 1.4e-6
+
+strehls_before = [np.exp(-np.var( naomi_field.phase[wvls[wvl_i]][i][pup>0.5] ) )  for i in range(len( naomi_screens )) ]
+strehls_after = [np.exp(-np.var( residual_screens[i][wvl_i][pup>0.5] ) )  for i in range(len( residual_screens )) ]
+
+outer = [['upper left',  'innerA'],
+          ['lower left', 'lower right']]
+
+its=len(residual_screens) #len(strehls_before )
+for i in np.arange(0,its , 5):  
+    #fig = plt.figure(figsize=(16, 12))
+    
+    fig, axd = plt.subplot_mosaic(outer ,figsize=(12,12))
+    plt.subplots_adjust(hspace=.5,wspace=.5)
+    
+    #ax1 = fig.add_subplot(131)
+    axd['upper left'].set_title('Naomi Residual (H-Band)',fontsize=20)
+    axd['upper left'].axis('off')
+    im1 = axd['upper left'].imshow( pup_disc * naomi_field.phase[wvls[wvl_i]][i] ,vmin = -np.pi, vmax = np.pi)
+    
+    divider = make_axes_locatable(axd['upper left'])
+    cax = divider.append_axes('bottom', size='5%', pad=0.05)
+    cbar = fig.colorbar( im1, cax=cax, orientation='horizontal')
+    cbar.set_label( r'OPD (rad)', rotation=0,fontsize=15)
+    
+    axd['lower left'].set_title('Baldr Detector',fontsize=20)
+    axd['lower left'].axis('off')
+    im2 = axd['lower left'].imshow( output_intesnities[i], vmin = 0, vmax =np.max(output_intesnities[i]) )
+    
+    divider = make_axes_locatable(axd['lower left'])
+    cax = divider.append_axes('bottom', size='5%', pad=0.05)
+    cbar = fig.colorbar(im2, cax=cax, orientation='horizontal',format='%.0e')
+    cbar.set_label( r'Intensity (adu)', rotation=0,fontsize=15)
+    
+    axd['lower right'].set_title('Baldr Residual (H-Band)',fontsize=20)
+    axd['lower right'].axis('off')
+    im3 = axd['lower right'].imshow( pup_disc * residual_screens[i][wvl_i] , vmin = -np.pi, vmax = np.pi )
+    
+    divider = make_axes_locatable(axd['lower right'])
+    cax = divider.append_axes('bottom', size='5%', pad=0.05)
+    cbar = fig.colorbar(im3, cax=cax, orientation='horizontal')
+    cbar.set_label( r'OPD (rad)', rotation=0, fontsize=15)
+    
+    axd['innerA'].plot(dt * np.arange(i), strehls_before[:i],label='before Baldr')
+    axd['innerA'].plot(dt * np.arange(i), strehls_after[:i],label='after Baldr')
+    
+    axd['innerA'].set_xlim([0, dt * its])
+    axd['innerA'].set_ylabel('J Strehl',fontsize=15)
+    axd['innerA'].set_xlabel('time (s)',fontsize=15)
+    axd['innerA'].legend(loc='upper right',fontsize=15)
+    plt.tight_layout()
+    #plt.savefig(f'/Users/bcourtne/Documents/ANU_PHD2/heimdallr/figures/animation_asgard_meeting_march_2023/{naomi_type}_screen_{i}')
+  
+
+
+
+
+
+
+
+#%% Comparing calibration source spectrum to stellar spectrum
+
+calib_spec = [np.mean(zwfs.control_variables['control_20_KL_modes']['calibration_field'].flux[k][zwfs.pup>0.5]) for k in zwfs.control_variables['control_20_KL_modes']['calibration_field'].flux ]
+wvlfilt = (asgard_field_kl20[0].wvl>=np.min(zwfs.wvls)) & (asgard_field_kl20[0].wvl<=np.max(zwfs.wvls))
+field_spec = np.mean(list(asgard_field_kl20[0].flux.values()),axis=(1,2))[wvlfilt] 
+
+plt.plot( 1e6*zwfs.wvls, calib_spec/np.mean(calib_spec), label='Solarstein spectrum (T=900K)' )
+# central wvls
+# np.mean(np.array( calib_spec) * 1e6* zwfs.wvls) / np.mean(np.array( calib_spec))
+# np.mean(1e6*zwfs.wvls )
+plt.plot( 1e6*asgard_field_kl20[0].wvl[wvlfilt], field_spec/np.mean(field_spec), label='input stellar spectrum' )
+plt.legend()
+plt.xlabel('wavelength [um]',**kwargs)
+plt.ylabel('normalized spectrum',**kwargs)
+plt.gca().tick_params(labelsizze=kwargs['fontsize'])
 
 #%% Full closed loop , first-we simulate first stage ao and save
 # input phase screens,dt, zwfs,Hmag , throuput , control_label

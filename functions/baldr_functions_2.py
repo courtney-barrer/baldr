@@ -1032,7 +1032,7 @@ class ZWFS():
         return( sig )
     
         
-def baldr_closed_loop(input_screen_fits, zwfs, control_key, Hmag, throughput, Ku, Nint):
+def baldr_closed_loop(input_screen_fits, zwfs, control_key, Hmag, throughput, Ku, Nint,return_intermediate_products=False):
     """
     re
 
@@ -1164,9 +1164,14 @@ def baldr_closed_loop(input_screen_fits, zwfs, control_key, Hmag, throughput, Ku
     
     #opd_after = []
     #strehl_after = []
+    if return_intermediate_products:
+        #time = []
+        DM_shape={}
+        detector_signal = {}
+        
     asgard_field = []
     err = []
-    for i in range(len(t_baldr)):
+    for i,tb in enumerate(t_baldr):
             
         # we apply the current dm shape to the input field coming from first stage AO correction 
         baldr_corrrected_field = ao_1_fields[i].applyDM(zwfs.dm) 
@@ -1182,7 +1187,10 @@ def baldr_closed_loop(input_screen_fits, zwfs, control_key, Hmag, throughput, Ku
         
         #now detect our baldr corrected field 
         sig_turb = zwfs.detection_chain(baldr_corrrected_field, FPM_on=True)  #intensity measured on sky with phase mask in
-    
+        
+        if return_intermediate_products:
+            DM_shape[tb] = zwfs.dm.surface 
+            detector_signal[tb] = sig_turb.signal
         #plt.imshow(sig_turb.signal)
         #plt.imshow(input_field.phase[zwfs.wvls[0]])
         
@@ -1204,8 +1212,11 @@ def baldr_closed_loop(input_screen_fits, zwfs, control_key, Hmag, throughput, Ku
         #sig_turb_after = zwfs.detection_chain( input_field[-1] , FPM_on=True)
         
         #input_field.append( input_field[-1].applyDM(zwfs.dm) )
-
-    return( asgard_field, err )
+    
+    if return_intermediate_products:
+        return( t_baldr, asgard_field, err , DM_shape, detector_signal)
+    if not return_intermediate_products:
+        return( t_baldr, asgard_field, err )
 
 
 
@@ -1433,7 +1444,7 @@ def build_IM(calibration_field, dm, FPM, det, control_basis, pokeAmp=50e-9):
     # estimate #photons of in calibration field by removing phase mask (zero phase shift)   
     sig_off_ref = detection_chain(calibration_field, dm, FPM_cal, det)
     sig_off_ref.signal = np.mean( [detection_chain(calibration_field, dm, FPM_cal, det).signal for _ in range(10)]  , axis=0) # average over a few 
-    Nph_cal = np.sum(sig_off_ref.signal)
+    Nph_cal = np.sum(sig_off_ref.signal) # Nph when phase mask is out 
     
     cmd = np.zeros( dm.surface.reshape(-1).shape ) 
     dm.update_shape(cmd) #zero dm first
