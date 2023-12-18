@@ -11,8 +11,20 @@ updates
 added initialization of phasemask in focal plane when creating ZWFS object 
 self.FPM.sample_phase_shift_region( nx_pix=self.mode['phasemask']['nx_size_focal_plane'], dx=self.mode['phasemask']['phasemask_diameter']/self.mode['phasemask']['N_samples_across_phase_shift_region'], wvl_2_count_res_elements = np.mean(self.wvls), verbose=True)
 
+
+added replace_nan_with in FPM.get_output_field() method. Default set to None which means non nan replacement takes place, if set to other value nan's are replaced with this '
+
+
 To Do
 ======
+- make apply DM enable offsets between field and DM, also detector have offset from fiel. Deal with nan values, especially with FPM.get_output_field() after field.applyDM() when there are offsets with DM 
+- use field.define_pupil_grid(self, dx, D_pix=None, center=(0,0)) to control offsets between output field of FPM and detector
+
+- include replace_nan_with in detection_chain and sub functions!!!
+-make cold stop radius part of default initiation of init_phasemask_config_dict. 
+-Luego initialisation of FPM object creates cold stop array (like mask aarray )
+-FPM method get output field then uses self (either None or the object toinclude it)..
+-delete cold_stop variables from all later functions (e.g. detection chain etc) 
 
 
 
@@ -128,7 +140,7 @@ class field:
     self.D_pix = D_pix # pixels across telescope diameter (may be smaller then nx_size)
 
     self.x = center[0] + np.linspace(-self.dx * (self.nx_size //2) , self.dx * (self.nx_size //2) , self.nx_size) #position of the field
-    self.y = center[1] + self.x.copy()
+    self.y = center[1] + np.linspace(-self.dx * (self.nx_size //2) , self.dx * (self.nx_size //2) , self.nx_size)
 
     self.X,self.Y = np.meshgrid(self.x, self.y)
     self.coordinates = np.vstack([self.X.ravel(), self.Y.ravel()]).T
@@ -143,22 +155,30 @@ class field:
           DM.coordinates = np.vstack([DM.X.ravel(), DM.Y.ravel()]).T
 
       if DM.surface_type == 'continuous' :
-          DM.nearest_interp_fn = scipy.interpolate.LinearNDInterpolator(DM.coordinates, DM.surface.reshape(1,-1)[0])
+          DM.nearest_interp_fn = scipy.interpolate.LinearNDInterpolator( DM.coordinates, DM.surface.reshape(1,-1)[0] , fill_value = np.nan)
       elif DM.surface_type == 'segmented':
-          DM.nearest_interp_fn = scipy.interpolate.NearestNDInterpolator(DM.coordinates, DM.surface.reshape(1,-1)[0] )
+          DM.nearest_interp_fn = scipy.interpolate.NearestNDInterpolator( DM.coordinates, DM.surface.reshape(1,-1)[0] , fill_value = np.nan )
       else:
           raise TypeError('\nDM object does not have valid surface_type\nmake sure DM.surface_type = "continuous" or "segmented" ')
           
       dm_at_field_pt = DM.nearest_interp_fn( self.coordinates ) # these x, y, points may need to be meshed...and flattened
-      
-      
-      dm_at_field_pt = dm_at_field_pt.reshape( self.nx_size, self.nx_size )
 
+      dm_at_field_pt = dm_at_field_pt.reshape( self.nx_size, self.nx_size )
+        
+    
       phase_shifts = {w:2*np.pi/w * (2*np.cos(DM.angle)) * dm_at_field_pt for w in self.wvl} # (2*np.cos(DM.angle)) because DM is double passed
       
       field_despues = copy.copy(self)
       
       field_despues.phase = {w: field_despues.phase[w] + phase_shifts[w] for w in field_despues.wvl}
+      
+      nan_fliter = np.isnan( field_despues.phase[self.wvl[0]] )
+      if np.any( nan_fliter ): #  nan values should arise if DM coordinates are outside of field coordinates         
+          # in this case we set flux to zero , keep phase to np.nan (this will be dealt with with the given detector )
+          # nan_fliter = np.isnan( field_dm.phase[w] )
+          for w in field_despues.wvl:
+              field_despues.flux[w][nan_fliter] = 0
+              #field_despues.phase[w][nan_fliter] = 0 # we do this so that get_output_field( works for FPM object
       
       return(field_despues)
 
@@ -213,9 +233,13 @@ class DM:
       
   def update_shape(self, cmd):
       self.surface = (self.gain  * cmd).reshape(self.N_act)
+
       
-  def create_IM(self, field, det):
-      print('to do')
+  def define_coordinates(self,x,y):
+      self.x = x
+      self.y = y
+      self.X, self.Y = np.meshgrid(self.x, self.y ) 
+      self.coordinates = np.vstack([self.X.ravel(), self.Y.ravel()]).T
 
       
 
@@ -450,7 +474,7 @@ class zernike_phase_mask:
         return( self.B/self.A * np.exp(1j * theta) - 1  )
 
     
-    def get_output_field(self, input_field , wvl_lims=[-np.inf, np.inf] , nx_size_focal_plane = None, dx_focal_plane=None, cold_stop_diam = None, keep_intermediate_products=False):
+    def get_output_field(self, input_field , wvl_lims=[-np.inf, np.inf] , nx_size_focal_plane = None, dx_focal_plane=None, cold_stop_diam = None, keep_intermediate_products=False, replace_nan_with=None):
         """
         get the output field (of class field) from a input field given the 
         current filter 
@@ -474,6 +498,8 @@ class zernike_phase_mask:
                                                                               just need to know pixel scale in mas to get mask radius)
         keep_intermediate_products : TYPE, optional
             DESCRIPTION. The default is False.
+        replace_nan_with : TYPE, None or 
+            DESCRIPTION. replace_nan_with what value? default is None (ie. we do not replace Nan values with anything. )
 
         Raises
         ------
@@ -579,8 +605,10 @@ class zernike_phase_mask:
             # --------------------------------
             # plane B (Focal plane)
 
-            
-            Psi_A = input_field.flux[w] * np.exp(1j * input_field.phase[w])
+            if replace_nan_with != None:
+                Psi_A = np.nan_to_num( input_field.flux[w] * np.exp(1j * input_field.phase[w]) ,  replace_nan_with )
+            else: # do not replace nan values
+                Psi_A = input_field.flux[w] * np.exp(1j * input_field.phase[w])
             
             #Psi_B = np.fft.fftshift( np.fft.fft2( Psi_A ) )#mft.mft(Psi_A, Na, Nb, n_res_elements, cpix=False)
         
@@ -680,7 +708,13 @@ class detector:
         self.DIT = DIT 
         self.ron = ron #e-
         
+        self.x = np.linspace(-self.npix/2 * self.pix_scale, self.npix/2 * self.pix_scale, self.npix )
+        self.y = np.linspace(-self.npix/2 * self.pix_scale, self.npix/2 * self.pix_scale, self.npix )
+        self.X, self.Y = np.meshgrid(self.x, self.y ) 
+        self.coordinates = np.vstack([self.X.ravel(), self.Y.ravel()]).T
+      
         
+    
     def interpolate_QE_to_field_wvls(self, field):
         
         fn = interp1d(list(self.qe.keys()), list(self.qe.values()) ,bounds_error=False, fill_value = 0)
@@ -691,10 +725,14 @@ class detector:
 
         
     def detect_field(self, field, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True):
-        # have to deal with cases that field grid is different to detector grid
-        # have to deal with field wavelengths (look at field class structure), detector wavelengths defined in self.qe dict
+        """
+        detector is always centered in detector coordinate frame, input field coordinates must be in detector coordinate frame
+        
+        """
+        # 
         # IMPORTANT TO HAVE FAST OPTION WHEN GRIDS ARE SET PROPERLY FROM THE START TO AVOID 2D INTERPOLATION!!
         
+        #init detector to zero values 
         self.det = np.zeros([ self.npix ,  self.npix ] )
         
         #wavelengths
@@ -705,11 +743,86 @@ class detector:
         if set(field_wvls) != set(det_wvl): # if wvls defined in field object not defined in detector (quantum efficiency) then we interpolate them           
             self.interpolate_QE_to_field_wvls( field )  #before it was self.interpolate_QE_to_field_wvls( self, field )
 
-            
-        if abs( (field.nx_size * field.dx - self.npix * self.pix_scale)/ (field.nx_size * field.dx))  > 0.01: # if discrepency is more than 1%
-            print('WARNING: some of the input field does not fall on the detector')
+        # check input field has defined coordinates
+        if not hasattr(field,'coordinates'):
+            raise TypeError(' Input field has no coordinates attribute. You may need to define grid using the method: field.define_pupil_grid(dx, D_pix, center) to initialise coordinates')
+        #if abs( (field.nx_size * field.dx - self.npix * self.pix_scale)/ (field.nx_size * field.dx))  > 0.01: # if discrepency is more than 1%
+        #    print('WARNING: some of the input field does not fall on the detector')
         
-        if grids_aligned: 
+        # pixel window (how many field pixels there are per detector pixel)
+        pw = self.pix_scale / field.dx
+        
+        if (pw >= 1) and not grids_aligned: 
+            # if field pixels are smaller than detector pixels then we interpolate onto new grid with nearest dx_new to field.dx 
+            # such that detector pixel scale = M * dx_new , with integer M.
+            PW = round(pw)
+            x_new, y_new = np.linspace(np.min(self.x), np.max(self.x), self.npix * PW) , np.linspace(np.min(self.y), np.max(self.y), self.npix * PW)
+            new_coord_dx = x_new[1] - x_new[0]
+            X_new, Y_new = np.meshgrid(x_new, y_new)
+            coords_new = np.vstack([X_new.ravel(), Y_new.ravel()]).T
+            interp_fn_dict = {w:scipy.interpolate.RegularGridInterpolator( (field.x, field.y) , field.flux[w], method='linear', bounds_error=False,fill_value=0)  for w in field.flux}
+            #interp_fn_dict = {w:scipy.interpolate.NearestNDInterpolator( field.coordinates, field.flux[w].reshape(-1) , fill_value = 0 ) for w in field.flux}
+            new_flux_field = {w:interp_fn_dict[w](coords_new).reshape(len(x_new),len(y_new)) for w in field.flux}
+            
+            for n in range(self.det.shape[0]):
+                for m in range(self.det.shape[1]):
+                    if ph_per_s_per_m2_per_nm:
+                        #flux per wvl bin in each pixel (photons per nm )
+                        P_wvl = np.array( [self.DIT * self.qe[w] * np.sum( new_flux_field[w][PW*n:PW*(n+1), PW*m:PW*(m+1)] * new_coord_dx**2 ) for w in new_flux_field] )
+                        P = integrate( P_wvl  , field_wvls * 1e9)  # total #photons
+                        if include_shotnoise:
+                            if P < 1e10: # draw from poission
+                                self.det[n,m] =  poisson.rvs( P ) # draw from poission distribution with mean = np.trapz( P_wvl  , field_wvls)
+                            else: #draw from normal (central limit theorem)
+                                self.det[n,m] =  np.random.normal(loc=P, scale=np.sqrt(P), size=None)
+                            #note 1e9 because field_wvls should be m and flux should be ph_per_s_per_m2_per_nm
+                        else:
+                            self.det[n,m] = P
+                            #DIT * self.qe[wvl] * np.sum( flux[pw*n:pw*(n+1), pw*m:pw*(m+1)] * field.dx**2 ) 
+                            
+                            
+                    else:
+                        raise TypeError('make sure flux units are ph_per_s_per_m2_per_nm othersie integrals will be wrong\n\
+                                        look at star2photons function')
+            
+        elif (pw < 1) and not grids_aligned:    # if field pixels are larger than detector pixels we interpolate directly onto detector grid 
+        
+            print('WARNING: fied is under sampled by detector. Consider decreasing detector pixle scale or increasing spatial resolution of the input field.')
+            interp_fn_dict = {w:scipy.interpolate.RegularGridInterpolator( (field.x, field.y) , field.flux[w], method='linear', bounds_error=False,fill_value=0)  for w in field.flux}
+            new_flux_field = {w:interp_fn_dict[w](self.coordinates).reshape(len(self.x),len(self.y)) for w in field.flux}
+            #new_coord_dx = self.x[1] - self.x[0] 
+            P = integrate( [self.DIT * self.qe[w] * new_flux_field[w]  * self.pix_scale**2 for w in new_flux_field], field_wvls * 1e9) 
+            if include_shotnoise:
+                if P < 1e10: # draw from poission
+                    self.det =  poisson.rvs( P ) # draw from poission distribution with mean = np.trapz( P_wvl  , field_wvls)
+                else: #draw from normal (central limit theorem)
+                    self.det =  np.random.normal(loc=P, scale=np.sqrt(P), size=None)
+                #note 1e9 because field_wvls should be m and flux should be ph_per_s_per_m2_per_nm
+            else:
+                self.det[n,m] = P
+        
+        # field center [pixel_x,pixel_y] in field frame
+        #field_center_pix = np.mean(field.coordinates,axis=0) / field.dx
+        
+        # align condition is if self.pix_scale = N * field.dx and field_center = M * field.dx for N & M integers within 0.1%.
+        #align_cond = ( abs(round(pw)-pw) < 1e-3 ) & ( abs(round(field_center_pix)-field_center_pix) < 1e-3)
+        
+        elif grids_aligned:
+            """
+            condition for grids_aligned
+            Nx * pixsclae = Dpix*dx ( field and detector cover same space )
+            pixelscale = M * dx 
+            field center = (0,0) which is detector center by default
+            """
+            field_center_pix = np.mean(field.coordinates,axis=0) / field.dx
+            
+            grid_equal_size = abs(self.npix * self.pix_scale - field.dx * field.nx_size) / (self.npix * self.pix_scale) < 1e-3 # area of field is equal to area of detector 
+            grid_fit = ( abs(round(pw)-pw) < 1e-3 ) # Npixels 
+            grid_centered = (field_center_pix @ field_center_pix)**0.5 < 1e-3 # distance to field center < 0.1 field pixels  
+            
+            align_cond = grid_equal_size & grid_fit & grid_centered
+            if not align_cond:
+                raise TypeError ( "\n=======\ncondition for grids_aligned not met. either\n -Nx * pixsclae = Dpix*dx ( field and detector cover same space )\n -pixelscale = M * dx\n -field center = (0,0) which is detector center by default ")
             
             pw = round(self.pix_scale / field.dx) # how many field grid points fit into a single detector pixel assuming same origin
         
@@ -732,99 +845,17 @@ class detector:
                     else:
                         raise TypeError('make sure flux units are ph_per_s_per_m2_per_nm othersie integrals will be wrong\n\
                                         look at star2photons function')
-        
-            # add the read noise 
-            self.add_ron( self.ron ) 
             
-            # convert detected signal to signal class
-            det_sig = signal( self.det )
             
-            return( det_sig )
+        # add the read noise 
+        self.add_ron( self.ron ) 
         
+        # convert detected signal to signal class
+        det_sig = signal( self.det )
         
-        # ------ caution here, not well tested 
-        else: # we try  interpolate to align grids 
-            
-            print('\n-------\nWARNING detect_field not well tested when grids_aligned=False.. be careful!!\n\n------')
-            
-            # field and detector x coordinates 
-            x_field = np.linspace(-field.nx_size * field.dx / 2, field.nx_size * field.dx / 2, field.nx_size)
-            x_det =  np.linspace(-self.npix * self.pix_scale / 2, self.npix * self.pix_scale / 2, self.npix)
+        return( det_sig )  
+          
         
-            pixel_window = self.pix_scale / field.dx # how many field grid points fit into a single detector pixel assuming same origin
-       
-            if pixel_window >= 1:
-                # interpolate field such that dx is nearest multiple of pix_scale
-                
-                                      
-                """\
-                new_pixel_window =  np.round( pixel_window ).astype(int) = self.pix_scale / new_dx
-                self.pix_scale / field.dx * M = new_pixel_window  
-                
-                => M = (np.round( pixel_window ).astype(int)/ pixel_window )as.type(int) =  ( new_pixel_window  / pixel_window )as.type(int)
-                
-                therefore
-                new_dx =  self.pix_scale/new_pixel_window =  self.pix_scale / (self.pix_scale / field.dx * M) = field.dx * M
-                """          
-                # field.dx * M = self.pix_scale 
-                # np.round( pixel_window ).astype(int) => self.pix_scale / field.dx  = self.pix_scale / (x_field[-1] - x_field[0])/len(x_field) 
-                M = (np.round( pixel_window ).astype(int) / pixel_window ).astype(int) 
-                new_pixel_window =  np.round( pixel_window ).astype(int) 
-                new_dx =  field.dx * M
-                
-                # interpolate onto detector grid, with interp fn returning zero outside of field grid 
-                x_field_new_x = np.linspace( x_det[0], x_det[-1],  new_dx ) 
-           
-                pw = new_pixel_window
-                
-                interp_flux = {}
-                
-                for wvl in field_wvls:
-                    flux = field[wvl].flux
-                    fn = interp2d(x_field,x_field, flux, bounds_error=False,fill_value=0) #interp(x_field, field)
-                    
-                    #new flux interpolated onto xgrid such that M * new_dx = self.pix_scale => M = new_pixel_window = self.pix_scale / new_dx  is int 
-                    interp_flux[wvl] = fn(x_field_new_x, x_field_new_x) 
-
-                
-                for n in range(self.det.shape[0]):
-                    for m in range(self.det.shape[0]):
-                        # integrate 
-                        #self.det[n,m] = DIT * self.qe[wvl] * new_flux[pw*n:pw*(n+1), pw*m:pw*(m+1)] * new_dx**2
-                        
-                        if ph_per_s_per_m2_per_nm:
-                            if include_shotnoise:
-                            
-                                P_wvl = np.array( [self.DIT * self.qe[w] * np.sum( field.flux[w][pw*n:pw*(n+1), pw*m:pw*(m+1)] * field.dx**2 ) for w in field_wvls] )
-                                self.det[n,m] =  poisson.rvs( integrate( P_wvl  , field_wvls * 1e9) ) # draw from poission distribution with mean = np.trapz( P_wvl  , field_wvls)
-                                #note 1e9 because field_wvls should be m and flux should be ph_per_s_per_m2_per_nm
-                            else:
-                                # integrate to get number of photons 
-                                P_wvl = np.array( [self.DIT * self.qe[w] * np.sum( field.flux[w][pw*n:pw*(n+1), pw*m:pw*(m+1)] * field.dx**2 ) for w in field_wvls] )
-                                self.det[n,m] =  integrate( P_wvl  , field_wvls * 1e9) # 
-                                #DIT * self.qe[wvl] * np.sum( flux[pw*n:pw*(n+1), pw*m:pw*(m+1)] * field.dx**2 ) 
-                        else:
-                            raise TypeError('make sure flux units are ph_per_s_per_m2_per_nm othersie integrals will be wrong\n\
-                                            look at star2photons function')
-                #if include_shotnoise
-                #Add Shot noise ! 
-                
-                # add the read noise 
-                self.add_ron( self.ron ) 
-                
-                # convert detected signal to signal class
-                det_sig = signal( self.det )
-                
-                return( det_sig )
-                
-            elif field.dx < self.pix_scale:
-                raise TypeError('field.dx > self.pix_scale \ntry increase detector\
-                                pixel size to at least correspond to field pixel size (dx) or bigger')
-    
-            else:
-                raise TypeError('not all cases met for checking field.dx > self.pix_scale etc')
-                
-
         
     def add_ron(self, sigma):
         # sigma = standard deviation , ron always 0 mean
@@ -991,7 +1022,7 @@ class ZWFS():
         self.control_variables[label]['sig_off_ref'] = sig_off_ref.signal
         """
         
-    def detection_chain(self, input_field, FPM_on=True, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True):
+    def detection_chain(self, input_field, FPM_on=True, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True, cold_stop=None):
         """
         # apply DM correction 
         # Pass through ZWFS (phase mask) onto back pupil
@@ -1025,9 +1056,9 @@ class ZWFS():
         dx_focal_plane = self.mode['phasemask']['phasemask_diameter'] / self.mode['phasemask']['N_samples_across_phase_shift_region']  #m/pixel
 
         if FPM_on:
-            sig = detection_chain(input_field, self.dm, self.FPM, self.det, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True, nx_size_focal_plane = self.mode['phasemask']['nx_size_focal_plane'], dx_focal_plane=dx_focal_plane)
+            sig = detection_chain(input_field, self.dm, self.FPM, self.det, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True, nx_size_focal_plane = self.mode['phasemask']['nx_size_focal_plane'], dx_focal_plane=dx_focal_plane, cold_stop=cold_stop)
         else: # we use a non phase shifting mask
-            sig = detection_chain(input_field, self.dm, self.FPM_off, self.det, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True, nx_size_focal_plane = self.mode['phasemask']['nx_size_focal_plane'], dx_focal_plane=dx_focal_plane)
+            sig = detection_chain(input_field, self.dm, self.FPM_off, self.det, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True, nx_size_focal_plane = self.mode['phasemask']['nx_size_focal_plane'], dx_focal_plane=dx_focal_plane, cold_stop=cold_stop)
         
         return( sig )
     
@@ -1288,7 +1319,7 @@ def init_a_field( Hmag, mode, wvls, pup_geometry, D_pix, dx, r0=0.1, L0=25, phas
 
 
     
-def detection_chain(input_field, dm, FPM, det, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True, nx_size_focal_plane = None, dx_focal_plane=None):
+def detection_chain(input_field, dm, FPM, det, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True, nx_size_focal_plane = None, dx_focal_plane=None, cold_stop=None):
     """
     This is the old one - we now do this as a method within ZWFS object
     # apply DM correction 
@@ -1320,7 +1351,7 @@ def detection_chain(input_field, dm, FPM, det, include_shotnoise=True, ph_per_s_
     
 
     input_field_dm = input_field.applyDM(dm) # apply DM phase shifts
-    output_field = FPM.get_output_field( input_field_dm,  nx_size_focal_plane = nx_size_focal_plane, dx_focal_plane = dx_focal_plane, keep_intermediate_products=False )
+    output_field = FPM.get_output_field( input_field_dm,  nx_size_focal_plane = nx_size_focal_plane, dx_focal_plane = dx_focal_plane,  keep_intermediate_products=False, cold_stop=cold_stop )
     output_field.define_pupil_grid(dx=input_field.dx, D_pix=input_field.D_pix)
     
     sig = det.detect_field( output_field, include_shotnoise=include_shotnoise, ph_per_s_per_m2_per_nm=ph_per_s_per_m2_per_nm, grids_aligned=grids_aligned)

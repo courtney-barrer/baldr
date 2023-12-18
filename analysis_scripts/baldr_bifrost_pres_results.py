@@ -266,6 +266,7 @@ mean_strehls = {}
 std_strehls = {}
 strehls={}
 Hband_wvl_indx = 15
+Jband_wvl_indx = 7
 plt.figure()
 kwargs={'fontsize':15}
 colors = ['red', 'darkred', 'blue', 'darkblue']
@@ -287,4 +288,48 @@ plt.figure()
 plt.errorbar( mean_strehls.keys(), mean_strehls.values() ,yerr=list( std_strehls.values()) )
 plt.ylabel('H-Band Strehl Ratio',**kwargs) 
 plt.xlabel( 'AT/Naomi category',**kwargs)
-               
+
+#%% Looking at Baldr closed loop sim results from bcourtne@chapman3.sc.eso.org:/home/bcourtne/baldr/baldr_closed_loop_simulation.py
+
+
+baldr_phasescreen_path = '/Users/bcourtne/Documents/ANU_PHD2/baldr/phase_screens_baldr'
+mean_strehls_after = {}
+std_strehls_after = {}
+strehls_after={}
+
+mean_strehls_before = {}
+std_strehls_before = {}
+strehls_before = {}
+
+
+#Hband_wvl_indx = 15
+Jband_wvl_indx = 7
+for grid_pt, col in zip(naomi_screen_fnames_dict,colors):
+    baldr_res = fits.open(baldr_phasescreen_path+f'/baldr_phase_AT_{grid_pt}.fits') 
+    
+    input_screen_fits =f'/Users/bcourtne/Documents/ANU_PHD2/baldr/phase_screens_first_stage_ao/first_stage_AO_phasescreens_{naomi_screen_fnames_dict[grid_pt]}.fits'
+    ao_1_screens_fits = fits.open(input_screen_fits) 
+    
+    strehls_after[grid_pt] = np.array([np.exp(-np.nanvar(baldr_res[Jband_wvl_indx].data[i] )) for i in range(len( baldr_res[Jband_wvl_indx].data )) ])
+    mean_strehls_after[grid_pt] = np.mean( strehls_after[grid_pt] )
+    std_strehls_after[grid_pt] = np.std( strehls_after[grid_pt] )
+    
+    strehls_before[grid_pt] = np.array([np.exp(-np.nanvar(ao_1_screens_fits[Jband_wvl_indx].data[i] )) for i in range(len( ao_1_screens_fits[Jband_wvl_indx].data )) ])
+    mean_strehls_before[grid_pt] = np.mean( strehls_before[grid_pt] )
+    std_strehls_before[grid_pt] = np.std( strehls_before[grid_pt] )
+    #plt.figure()
+    #plt.hist(strehls_after[grid_pt] , alpha =0.4, label=grid_pt,color=col )
+    plt.figure()
+    plt.title(grid_pt)
+    plt.plot( np.array([np.exp(-np.nanvar(baldr_res[Jband_wvl_indx ].data[i])) for i in range(len(baldr_res[Jband_wvl_indx ].data))] ) ,label='after Baldr')
+    #plt.plot( np.array([np.exp(-np.nanvar(ao_1_screens_fits[Jband_wvl_indx].data[i] )) for i in range(len( ao_1_screens_fits[Jband_wvl_indx].data )) ]) ,label='before Baldr')
+    plt.ylabel('J-Bnad Strehl Ratio')
+    plt.xlabel('iterations')
+    #plt.legend()
+    
+plt.figure()
+plt.errorbar( mean_strehls_after.keys(), mean_strehls_after.values() ,yerr=list( std_strehls_after.values()) ,label='after Baldr')
+plt.errorbar( mean_strehls_before.keys(), mean_strehls_before.values() ,yerr=list( std_strehls_before.values()) ,label='before Baldr')
+plt.legend()
+plt.ylabel('J-Band Strehl Ratio',**kwargs) 
+plt.xlabel( 'AT/Naomi category',**kwargs)
