@@ -20,6 +20,12 @@ It now uses self.nx_size_focal_plane & self.dx_focal_plane internally. This mean
 
 To Do
 ======
+- re-test baldr closed loop with cold stop and pupil offsets
+- introduce pupil control strategy along with closed loop operation 
+
+
+Completed
+======
 - make apply DM enable offsets between field and DM, also detector have offset from fiel. Deal with nan values, especially with FPM.get_output_field() after field.applyDM() when there are offsets with DM 
 - use field.define_pupil_grid(self, dx, D_pix=None, center=(0,0)) to control offsets between output field of FPM and detector
 
@@ -962,7 +968,9 @@ class ZWFS():
         
         # create sample of phase mask in focal plane based on mode dict , this automatically initiates x,y coordinates in focal plane for zwfs.FPM
         self.FPM.sample_phase_shift_region( nx_pix=self.mode['phasemask']['nx_size_focal_plane'], dx=self.mode['phasemask']['phasemask_diameter']/self.mode['phasemask']['N_samples_across_phase_shift_region'], wvl_2_count_res_elements = np.mean(self.wvls), verbose=True)
-
+        # same for when focal plane mask dot is out 
+        self.FPM_off.sample_phase_shift_region( nx_pix=self.mode['phasemask']['nx_size_focal_plane'], dx=self.mode['phasemask']['phasemask_diameter']/self.mode['phasemask']['N_samples_across_phase_shift_region'], wvl_2_count_res_elements = np.mean(self.wvls), verbose=True)
+    
         
     def setup_control_parameters( self, calibration_source_config_dict, N_controlled_modes, modal_basis='zernike', pokeAmp = 50e-9 , label='control_1'):
 
@@ -1478,6 +1486,8 @@ def build_IM(calibration_field, dm, FPM, det, control_basis, pokeAmp=50e-9,repla
     #define calibrator phase mask with zero phase shift
     FPM_cal = zernike_phase_mask(A=FPM.A,B=FPM.B,phase_shift_diameter=FPM.phase_shift_diameter,\
                                        f_ratio=FPM.f_ratio,d_on=FPM.d_on,d_off=FPM.d_on,glass_on=FPM.glass_on,glass_off=FPM.glass_off)
+    
+    FPM_cal.sample_phase_shift_region(FPM.nx_size_focal_plane, dx=FPM.dx_focal_plane, verbose=True)
     ## ==== CREATE INTERACTION MATRIX
     # modal IM  (modal)  
     cmd = np.zeros( dm.surface.reshape(-1).shape ) 

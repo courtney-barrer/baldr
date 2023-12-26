@@ -67,6 +67,7 @@ def plot_ao_correction_process(phase_before, phase_reco, phase_after , title_lis
     cbar = fig.colorbar(im3, cax=cax, orientation='horizontal')
     cbar.set_label( r'OPD $(\mu m)$', rotation=0)
     
+
 #%%    now consider dectecting and correcting a turbulent input field in open loop 
 # testing the new configuration formating 
 tel_config =  config.init_telescope_config_dict(use_default_values = True)
@@ -237,7 +238,7 @@ zwfs = baldr.ZWFS(mode_dict)
 
 # define an internal calibration source 
 calibration_source_config_dict = config.init_calibration_source_config_dict(use_default_values = True)
-calibration_source_config_dict['temperature']=9000 #K (Thorlabs SLS202L/M - Stabilized Tungsten Fiber-Coupled IR Light Source )
+calibration_source_config_dict['temperature']=1900 #K (Thorlabs SLS202L/M - Stabilized Tungsten Fiber-Coupled IR Light Source )
 calibration_source_config_dict['calsource_pup_geometry'] = 'disk'
 
 #add control method using first 20 Zernike modes
@@ -254,12 +255,13 @@ t_bald, asgard_field_kl20, err_kl20, DM_shape_kl20, detector_signal_kl20 = baldr
 #t_bald, asgard_field_kl70, err_kl70 = baldr.baldr_closed_loop(input_screen_fits, zwfs, control_key='control_70_KL_modes', Hmag=0, throughput=0.01, Ku=1 , Nint=2 ,return_intermediate_products=False)
 
 #%%
-wvl_k = asgard_field_kl70[0].wvl[7]
+
+wvl_k = asgard_field_kl20[0].wvl[7]
 kwargs={'fontsize':15}
 plt.figure()
 plt.plot( np.linspace(0,detector_config['DIT']*len(asgard_field_kl20), len(asgard_field_kl20) ), [np.exp(-np.nanvar( asgard_field_kl20[i].phase[wvl_k] )) for i in range( len(asgard_field_kl20))] ,label='Baldr | 20 KL modes')
 #plt.plot( np.linspace(0,detector_config['DIT']*len(asgard_field_kl40), len(asgard_field_kl40) ), [np.exp(-np.nanvar( asgard_field_kl40[i].phase[wvl_k] )) for i in range( len(asgard_field_kl40))]  ,label='Baldr | 40 KL modes')
-plt.plot( np.linspace(0,detector_config['DIT']*len(asgard_field_kl70), len(asgard_field_kl70) ), [np.exp(-np.nanvar( asgard_field_kl70[i].phase[wvl_k] )) for i in range( len(asgard_field_kl70))]  ,label='Baldr | 70 KL modes')
+#plt.plot( np.linspace(0,detector_config['DIT']*len(asgard_field_kl70), len(asgard_field_kl70) ), [np.exp(-np.nanvar( asgard_field_kl70[i].phase[wvl_k] )) for i in range( len(asgard_field_kl70))]  ,label='Baldr | 70 KL modes')
 
 plt.plot( np.linspace(0,len(ao_1_screens_fits[7].data)*ao_1_screens_fits[7].header['HIERARCH dt[s]'], len(ao_1_screens_fits[7].data)) , [np.exp(-np.nanvar(ao_1_screens_fits[7].data[i])) for i in range(len( ao_1_screens_fits[7].data))], label='Naomi')
 plt.legend()
@@ -281,8 +283,7 @@ header_dict={'what':'baldr_closed_loop','first_stage_AO':'naomi/AT', 'dt':0.001,
 #baldr.pick_pupil('AT',dim=zwfs.mode['telescope']['pupil_nx_pixels'], diameter=zwfs.mode['telescope']['pupil_nx_pixels'])
 
 
-#%% make animation , show input screen before baldr, DM , after baldr screen, Detector, strehls
-
+#%% make animation , show input screen before baldr, DM, after baldr screen, Detector, strehls
 
 from mpl_toolkits.axes_grid1 import make_axes_locatable
   
