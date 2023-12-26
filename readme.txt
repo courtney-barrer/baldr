@@ -60,4 +60,13 @@ Then we need to append this information to my_zwfs.control_variables including t
 	once a control mode is defined we can do open or closed loop simulation by inputing fields to the objects created from 
 	the ZWFS control mode configuration file.
 
+
+
+A few additional notes
+- Coordinates are nearly always referenced in the input pupil plane for the field, DM, and detector
+- Coordinates of detectors are always centered at detector center (0,0). Therefore input field coordinates need to defined relative to detector coorindates when detecting field
+- Coordinates of the DM are initialized using DM.define_coordinates(x,y). 
+- If you apply DM to a field via field.applyDM( DM ) any field points that are outside the DM coordinates will automatically make field amp=0, field phase = np.nan.  
+
+
 """

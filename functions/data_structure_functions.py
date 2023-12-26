@@ -59,6 +59,7 @@ def init_phasemask_config_dict(use_default_values = True) :
         phasemask_config_dict['phasemask_diameter'] = 1.06 * phasemask_config_dict['fratio'] * 1.6e-6 # meters , defults to 1.06resolution elements at 1.6um (remember diameter = number_of_resolution_elements * f_ratio * lambda )...diffraction limit microscope (m) d = lambda/(2*NA) = lambda * F where F=focal length/D 
         phasemask_config_dict['N_samples_across_phase_shift_region'] = 10 # number of pixels across phase shift region in focal plane
         phasemask_config_dict['nx_size_focal_plane'] = 12*20 # number of pixels in x in focal plane
+        phasemask_config_dict['cold_stop_diameter'] = 10 * phasemask_config_dict['fratio'] * 1.6e-6  #[m] default 10 \lambda/D @1.6um 
     else:
         phasemask_config_dict['off-axis_transparency'] = np.nan # unitless (between 0-1)
         phasemask_config_dict['on-axis_transparency'] = np.nan # unitless (between 0-1)
@@ -70,6 +71,7 @@ def init_phasemask_config_dict(use_default_values = True) :
         phasemask_config_dict['phasemask_diameter'] = np.nan # lambda/D
         phasemask_config_dict['N_samples_across_phase_shift_region'] = np.nan # number of pixels across phase shift region in focal plane
         phasemask_config_dict['nx_size_focal_plane'] = np.nan # number of pixels in x in focal plane
+        phasemask_config_dict['cold_stop_diameter'] = np.nan
     
     
     return( phasemask_config_dict )

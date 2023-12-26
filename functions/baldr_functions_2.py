@@ -14,6 +14,9 @@ self.FPM.sample_phase_shift_region( nx_pix=self.mode['phasemask']['nx_size_focal
 
 added replace_nan_with in FPM.get_output_field() method. Default set to None which means non nan replacement takes place, if set to other value nan's are replaced with this '
 
+removed nx_size_focal_plane and dx_focal_plane as input to FPM.get_output_field() & get_b() method. 
+It now uses self.nx_size_focal_plane & self.dx_focal_plane internally. This means focal plane coordinates must be initialized first using FPM.sample_phaseshift_region() before using FPM.get_output_field() 
+
 
 To Do
 ======
@@ -25,6 +28,8 @@ To Do
 -Luego initialisation of FPM object creates cold stop array (like mask aarray )
 -FPM method get output field then uses self (either None or the object toinclude it)..
 -delete cold_stop variables from all later functions (e.g. detection chain etc) 
+
+- Need to clean up using ZWFS.mode_dict and use self in functions since we could find descrepencies between setting an attribute that is not updated in mode dict.
 
 
 
@@ -245,7 +250,7 @@ class DM:
 
 
 class zernike_phase_mask:
-    def __init__(self, A=1, B=1, phase_shift_diameter=1e-6, f_ratio=21, d_on=26.5e-6, d_off=26e-6, glass_on='sio2', glass_off='sio2'):
+    def __init__(self, A=1, B=1, phase_shift_diameter=1e-6, f_ratio=21, d_on=26.5e-6, d_off=26e-6, glass_on='sio2', glass_off='sio2',cold_stop_diameter=None):
         """
         
 
@@ -267,6 +272,8 @@ class zernike_phase_mask:
             name of glass in on-axis (phase shift region) part of mask (see nglass function for options)
         glass_off : TYPE, string
             name of glass in on-axis (phase shift region) part of mask 
+        cold_stop_diameter : None or numeric 
+            diameter of the effective cold stop in focal plane [m]. This is used to create a cold stop mask in later functions
 
         Returns
         -------
@@ -281,11 +288,11 @@ class zernike_phase_mask:
         self.d_off = d_off
         self.glass_on = glass_on
         self.glass_off = glass_off
-        
+        self.cold_stop_diameter = cold_stop_diameter
         #nx_size_focal_plane = nx_size_focal_plane , dx_focal_plane = dx_focal_plane,
         #phase_shift_diameter = rad_lam_o_D * f_ratio * wvls[0]   ##  f_ratio * wvls[0] = lambda/D  given f_ratio
         #dx_focal_plane = phase_shift_diameter / N_samples_across_phase_shift_region  # dif elemetn in focal plane (m)
- 
+        
     
     def optimise_depths(self, desired_phase_shift, across_desired_wvls, fine_search = False, verbose=True):
         
@@ -418,6 +425,7 @@ class zernike_phase_mask:
         """
         create a grid that samples the region where phase mask applies phase shift. 
         1 = phase shift applied, 0 = no phase shift applied
+        this also initiates the cold stop mask under self.cold_stop_mask
 
         Parameters
         ----------
@@ -444,7 +452,7 @@ class zernike_phase_mask:
         phase_shift_region = aperture.disc(dim=nx_pix, size= round(self.phase_shift_diameter/dx), diameter=True) 
         
         if verbose:
-            print( f'\n---\n discretization error of phase shift diameter = {dx*(self.phase_shift_diameter/dx-round(self.phase_shift_diameter/dx))}m\n\
+            print( f'\nphase mask sampling checks:\n---\n discretization error of phase shift diameter = {dx*(self.phase_shift_diameter/dx-round(self.phase_shift_diameter/dx))}m\n\
                    #resolution elements at {np.round(1e6*wvl_2_count_res_elements,2)}um across phase shift diameter \
                        = {np.round(self.phase_shift_diameter/(wvl_2_count_res_elements * self.f_ratio),3)}\n' )
         
@@ -453,6 +461,24 @@ class zernike_phase_mask:
         self.dx_focal_plane = dx
         self.x_focal_plane = np.linspace(-nx_pix  * dx / 2, nx_pix  * dx / 2, nx_pix)
         
+        # create self.cold_stop_mask attribute if  self.cold_stop_diameter!=None
+        self.update_cold_stop_parameters( self.cold_stop_diameter )
+        
+    def update_cold_stop_parameters(self, cold_stop_diameter):
+        if hasattr(self, "phase_shift_region") :
+            
+            self.cold_stop_diameter = cold_stop_diameter
+            
+            if isinstance(cold_stop_diameter, (int, float, type(None))):
+                if cold_stop_diameter != None: 
+                    self.cold_stop_mask = aperture.disc(dim = self.nx_size_focal_plane, size = cold_stop_diameter/self.dx_focal_plane, diameter=True)
+                    
+                elif (cold_stop_diameter == None) & hasattr(self, "cold_stop_mask") : # delete cold_stop_mask attribute if diameter = None (i.e. we don't have a cold stop)
+                    delattr(self, "cold_stop_mask") 
+            else:
+                raise TypeError('cold_stop_diameter is niether None nor numeric. It needs to be one of these types to be valid.')
+        else:
+            raise TypeError('focal plane grid has not been initialised with FPM object. Use FPM.sample_phase_shift_region() method to initialize it!')
     
     def get_filter_design_parameter(self,wvl):
         """
@@ -474,7 +500,7 @@ class zernike_phase_mask:
         return( self.B/self.A * np.exp(1j * theta) - 1  )
 
     
-    def get_output_field(self, input_field , wvl_lims=[-np.inf, np.inf] , nx_size_focal_plane = None, dx_focal_plane=None, cold_stop_diam = None, keep_intermediate_products=False, replace_nan_with=None):
+    def get_output_field(self, input_field , wvl_lims=[-np.inf, np.inf] ,  keep_intermediate_products=False, replace_nan_with=None):
         """
         get the output field (of class field) from a input field given the 
         current filter 
@@ -485,17 +511,6 @@ class zernike_phase_mask:
             DESCRIPTION.
         wvl_lims : TYPE, optional
             DESCRIPTION. The default is [-np.inf, np.inf].
-        focal_plane_nx_pix: TYPE, int
-            DESCRIPTION. Number of pixels used to sample focal plane (PSF and phase mask) 
-            when applyiong Fourier transform (mft). Default is None which sets nx_size_focal_plane=input_field.nx_size 
-            (ie.e same grid size as input field)
-        dx_focal_plane: TYPE float
-            DESCRIPTION. pixel scale in focal plane (m/pix). Default is None which sets dx_focal_plane=self.phase_shift_diameter/20 
-            (ie. default is that dx is set so there is 20 pixels over the phase shift region diameter)
-        cold_stop_diam: float or array like
-            if scalar input is considered the cold stop radius (m). if array like it is considered to be the cold stop mask to multiply 
-            by in the focal plane. Note sometimes cold stop given in f-ratio (N=f/D~1/2NA, where NA = nsin(alpha), alpha being acceptance angle,\
-                                                                              just need to know pixel scale in mas to get mask radius)
         keep_intermediate_products : TYPE, optional
             DESCRIPTION. The default is False.
         replace_nan_with : TYPE, None or 
@@ -531,13 +546,17 @@ class zernike_phase_mask:
                             try method self.sample_phase_shift_region(nx_pix, dx, \
                              wvl_2_count_res_elements = 1.65e-6, verbose=True)\n')
         """
-
+        
+        if not hasattr(self, 'phase_shift_region'):
+            raise TypeError( '\nfocal plane coordinates are not initialized, use FPM.sample_phase_shift_region(..) to intialize them in your FPM object  ')
+        """
         if nx_size_focal_plane==None:
             nx_size_focal_plane = input_field.nx_size
             
         if dx_focal_plane==None:
             dx_focal_plane = self.phase_shift_diameter/10
-
+        """
+        
         # wavelengths defined in the input field 
         input_wvls = np.array( input_field.wvl )
 
@@ -566,34 +585,19 @@ class zernike_phase_mask:
             self.b = []
             self.diam_mask_lambda_on_D = []
             
-       
-        if cold_stop_diam == None:
-            # Sample phase mask in focal plane 
-            self.sample_phase_shift_region( nx_pix=nx_size_focal_plane, dx=dx_focal_plane, verbose=False) # 
-            
+
+        if self.cold_stop_diameter == None:
+
             # phase mask filter for each wavelength
             H = {w: self.A*(1 + (self.B/self.A * np.exp(1j * theta) - 1) * self.phase_shift_region  ) for w,theta in zip(wvls,thetas) }
  
-        else:
+        elif (self.cold_stop_diameter != None) & (hasattr(self,'cold_stop_mask')):
             # if cold stop given in f-ratio (N=f/D~1/2NA, where NA = sin(alpha), alpha being acceptance angle, just need to know pixel scale in mas)
             # create cold stop
-            if hasattr(cold_stop_diam, "__len__") : # if has length attribute we consider it a diameter 
-                cold_stop = aperture.disc(dim=nx_size_focal_plane, size = cold_stop_diam/dx_focal_plane, diameter=True)
-            elif not hasattr(cold_stop_diam, "__len__") : # we assume input is actual cold stop mask
-                
-                if cold_stop_diam.shape == self.phase_shift_region.shape: #needs to have same shape for multiplying 
-                    cold_stop = cold_stop_diam
-                else:
-                    raise TypeError('cold_stop_diam.shape != self.phase_shift_region.shape\n\
-                                    make sure they have same shape if you want to input the cold stop mask yourself\n\
-                                        alternatively you can just input a scalar diameter and the code will create (this will be slower) the appropiate mask')
-            else:
-                raise TypeError('cold_stop_diam fails check hasattr(cold_stop_diam, "__len__").\n\
-                                check the input cold_stop_diam ')
-            
-            # phase mask filter for each wavelength
-            H = {w: cold_stop * self.A*(1 + (self.B/self.A * np.exp(1j * theta) - 1) * self.phase_shift_region  ) for w,theta in zip(wvls,thetas) }
-            
+            H = {w: self.cold_stop_mask * self.A*(1 + (self.B/self.A * np.exp(1j * theta) - 1) * self.phase_shift_region  ) for w,theta in zip(wvls,thetas) }
+        else:
+            raise TypeError( "Inconsistency!! either FPM.cold_stop_diameter == None & hasattr(FPM,'cold_stop_mask') or visa versa!.\n IF FPM.cold_stop_diameter != None (i.e. is numeric) then FPM.cold_stop_mask must exist." )
+
         
         for w in wvls:
             
@@ -614,11 +618,11 @@ class zernike_phase_mask:
         
             #Psi_C = np.fft.ifft2( H[w] * Psi_B ) #mft.imft( H[w] * Psi_B , Na, Nb, n_res_elements, cpix=False) 
             
-            Psi_B = mft.mft(Psi_A, input_field.nx_size, nx_size_focal_plane , m1, cpix=False)
+            Psi_B = mft.mft(Psi_A, input_field.nx_size, self.nx_size_focal_plane , m1, cpix=False)
             
             #print(R_mask , input_field.nx_size, nx_size_focal_plane , H[w].shape, Psi_A.shape, Psi_B.shape)
         
-            Psi_C = mft.imft( H[w] * Psi_B , nx_size_focal_plane, input_field.nx_size, m1, cpix=False) 
+            Psi_C = mft.imft( H[w] * Psi_B , self.nx_size_focal_plane, input_field.nx_size, m1, cpix=False) 
             
             output_field.flux[w] = abs(Psi_C) #check A=1,B=1,theta=0 that Psi_C preserves photon flux
             output_field.phase[w] = np.angle(Psi_C)
@@ -627,7 +631,7 @@ class zernike_phase_mask:
             
     
             if keep_intermediate_products:
-                self.b.append( mft.imft( self.phase_shift_region * Psi_B, nx_size_focal_plane, input_field.nx_size, m1, cpix=False) )
+                self.b.append( mft.imft( self.phase_shift_region * Psi_B, self.nx_size_focal_plane, input_field.nx_size, m1, cpix=False) )
                 self.Psi_A.append( np.array( Psi_A ) )
                 self.Psi_B.append( np.array( Psi_B ) )
                 self.Psi_C.append( np.array( Psi_C ) )
@@ -637,7 +641,7 @@ class zernike_phase_mask:
         return( output_field )
     
     
-    def get_b(self, input_field , wvl_lims=[-np.inf, np.inf] , nx_size_focal_plane = None, dx_focal_plane=None):
+    def get_b(self, input_field , wvl_lims=[-np.inf, np.inf] ):
         """
         get b, part of the the reference field of the ZWFS field (convolution with the phase shift region and the input field)
 
@@ -661,13 +665,18 @@ class zernike_phase_mask:
         b (an array of complex values that are the reference field )
         """
         
+        if not hasattr(self, 'phase_shift_region'):
+            raise TypeError( '\nfocal plane coordinates are not initialized, use FPM.sample_phase_shift_region(..) to intialize them in your FPM object  ')
+            
         b={}
+        
+        """
         if nx_size_focal_plane==None:
             nx_size_focal_plane = input_field.nx_size
             
         if dx_focal_plane==None:
             dx_focal_plane = self.phase_shift_diameter/10
-
+        """
         # wavelengths defined in the input field 
         input_wvls = np.array( input_field.wvl )
 
@@ -689,9 +698,9 @@ class zernike_phase_mask:
 
             Psi_A = input_field.flux[w] * np.exp(1j * input_field.phase[w])
             
-            Psi_B = mft.mft(Psi_A, input_field.nx_size, nx_size_focal_plane , m1, cpix=False)
+            Psi_B = mft.mft(Psi_A, input_field.nx_size, self.nx_size_focal_plane , m1, cpix=False)
         
-            b[w] = mft.imft( self.phase_shift_region * Psi_B, nx_size_focal_plane, input_field.nx_size, m1, cpix=False) 
+            b[w] = mft.imft( self.phase_shift_region * Psi_B, self.nx_size_focal_plane, input_field.nx_size, m1, cpix=False) 
             
         return(b)
     
@@ -727,7 +736,7 @@ class detector:
     def detect_field(self, field, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True):
         """
         detector is always centered in detector coordinate frame, input field coordinates must be in detector coordinate frame
-        
+        See baldr/A_general_hidden_stuff/analysis_of_detect_field_functionality.py for testing of this function 
         """
         # 
         # IMPORTANT TO HAVE FAST OPTION WHEN GRIDS ARE SET PROPERLY FROM THE START TO AVOID 2D INTERPOLATION!!
@@ -764,6 +773,7 @@ class detector:
             #interp_fn_dict = {w:scipy.interpolate.NearestNDInterpolator( field.coordinates, field.flux[w].reshape(-1) , fill_value = 0 ) for w in field.flux}
             new_flux_field = {w:interp_fn_dict[w](coords_new).reshape(len(x_new),len(y_new)) for w in field.flux}
             
+            #NOTE: self.det is transposed here due to behaviour of scipy.interpolate.RegularGridInterpolator inorder to keep consistent with when grids are aligned.
             for n in range(self.det.shape[0]):
                 for m in range(self.det.shape[1]):
                     if ph_per_s_per_m2_per_nm:
@@ -772,12 +782,12 @@ class detector:
                         P = integrate( P_wvl  , field_wvls * 1e9)  # total #photons
                         if include_shotnoise:
                             if P < 1e10: # draw from poission
-                                self.det[n,m] =  poisson.rvs( P ) # draw from poission distribution with mean = np.trapz( P_wvl  , field_wvls)
+                                self.det[m,n] =  poisson.rvs( P ) # draw from poission distribution with mean = np.trapz( P_wvl  , field_wvls)
                             else: #draw from normal (central limit theorem)
-                                self.det[n,m] =  np.random.normal(loc=P, scale=np.sqrt(P), size=None)
+                                self.det[m,n] =  np.random.normal(loc=P, scale=np.sqrt(P), size=None)
                             #note 1e9 because field_wvls should be m and flux should be ph_per_s_per_m2_per_nm
                         else:
-                            self.det[n,m] = P
+                            self.det[m,n] = P
                             #DIT * self.qe[wvl] * np.sum( flux[pw*n:pw*(n+1), pw*m:pw*(m+1)] * field.dx**2 ) 
                             
                             
@@ -799,7 +809,7 @@ class detector:
                     self.det =  np.random.normal(loc=P, scale=np.sqrt(P), size=None)
                 #note 1e9 because field_wvls should be m and flux should be ph_per_s_per_m2_per_nm
             else:
-                self.det[n,m] = P
+                self.det = P.T
         
         # field center [pixel_x,pixel_y] in field frame
         #field_center_pix = np.mean(field.coordinates,axis=0) / field.dx
@@ -935,13 +945,13 @@ class ZWFS():
        	self.FPM = zernike_phase_mask(A=mode_dict['phasemask']['off-axis_transparency'],B=mode_dict['phasemask']['on-axis_transparency'],\
        		phase_shift_diameter=mode_dict['phasemask']['phasemask_diameter'], f_ratio=mode_dict['phasemask']['fratio'],\
        		d_on=mode_dict['phasemask']['on-axis phasemask depth'],d_off=mode_dict['phasemask']['off-axis phasemask depth'],\
-       		glass_on=mode_dict['phasemask']['on-axis_glass'],glass_off=mode_dict['phasemask']['off-axis_glass'])
+       		glass_on=mode_dict['phasemask']['on-axis_glass'],glass_off=mode_dict['phasemask']['off-axis_glass'],cold_stop_diameter=mode_dict['phasemask']['cold_stop_diameter'])
             
         # FPM when no phase shift is applied    (e.g.   d_on = d_off)
         self.FPM_off = zernike_phase_mask(A=mode_dict['phasemask']['off-axis_transparency'],B=mode_dict['phasemask']['on-axis_transparency'],\
        		phase_shift_diameter=mode_dict['phasemask']['phasemask_diameter'], f_ratio=mode_dict['phasemask']['fratio'],\
        		d_on=mode_dict['phasemask']['on-axis phasemask depth'],d_off=mode_dict['phasemask']['on-axis phasemask depth'],\
-       		glass_on=mode_dict['phasemask']['on-axis_glass'],glass_off=mode_dict['phasemask']['off-axis_glass'])
+       		glass_on=mode_dict['phasemask']['on-axis_glass'],glass_off=mode_dict['phasemask']['off-axis_glass'],cold_stop_diameter=mode_dict['phasemask']['cold_stop_diameter'])
             
 
         self.det = detector(npix=mode_dict['detector']['detector_npix'], pix_scale = mode_dict['detector']['pix_scale_det'] , DIT= mode_dict['detector']['DIT'], ron=mode_dict['detector']['ron'], QE={w:QE for w in self.wvls})
@@ -953,8 +963,7 @@ class ZWFS():
         # create sample of phase mask in focal plane based on mode dict , this automatically initiates x,y coordinates in focal plane for zwfs.FPM
         self.FPM.sample_phase_shift_region( nx_pix=self.mode['phasemask']['nx_size_focal_plane'], dx=self.mode['phasemask']['phasemask_diameter']/self.mode['phasemask']['N_samples_across_phase_shift_region'], wvl_2_count_res_elements = np.mean(self.wvls), verbose=True)
 
-
-
+        
     def setup_control_parameters( self, calibration_source_config_dict, N_controlled_modes, modal_basis='zernike', pokeAmp = 50e-9 , label='control_1'):
 
         self.control_variables[label] = {}
@@ -965,8 +974,9 @@ class ZWFS():
         
         interaction_matrix, control_matrix = build_IM(calibration_field, self.dm, self.FPM, self.det, control_basis, pokeAmp=pokeAmp)
         
-        sig_on = detection_chain(calibration_field, self.dm, self.FPM, self.det)
-        sig_off = detection_chain(calibration_field, self.dm, self.FPM_off, self.det)
+        #!!!! WARNING !!! WE DO NOT REPLACE NAN VALUES WITH CALIBRATION SOURCE
+        sig_on = detection_chain(calibration_field, self.dm, self.FPM, self.det, replace_nan_with = None)
+        sig_off = detection_chain(calibration_field, self.dm, self.FPM_off, self.det, replace_nan_with = None)
         
         Nph_cal = np.sum(sig_off.signal)
         
@@ -1022,7 +1032,7 @@ class ZWFS():
         self.control_variables[label]['sig_off_ref'] = sig_off_ref.signal
         """
         
-    def detection_chain(self, input_field, FPM_on=True, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True, cold_stop=None):
+    def detection_chain(self, input_field, FPM_on=True, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True, replace_nan_with=None):
         """
         # apply DM correction 
         # Pass through ZWFS (phase mask) onto back pupil
@@ -1053,17 +1063,17 @@ class ZWFS():
         
 
         # define our focal plane pixel scale by how many pixels we want across the phase mask region
-        dx_focal_plane = self.mode['phasemask']['phasemask_diameter'] / self.mode['phasemask']['N_samples_across_phase_shift_region']  #m/pixel
+        #dx_focal_plane = self.FPM.dx_focal_plane # self.mode['phasemask']['phasemask_diameter'] / self.mode['phasemask']['N_samples_across_phase_shift_region']  #m/pixel
 
         if FPM_on:
-            sig = detection_chain(input_field, self.dm, self.FPM, self.det, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True, nx_size_focal_plane = self.mode['phasemask']['nx_size_focal_plane'], dx_focal_plane=dx_focal_plane, cold_stop=cold_stop)
+            sig = detection_chain(input_field, self.dm, self.FPM, self.det, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True, replace_nan_with=replace_nan_with)
         else: # we use a non phase shifting mask
-            sig = detection_chain(input_field, self.dm, self.FPM_off, self.det, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True, nx_size_focal_plane = self.mode['phasemask']['nx_size_focal_plane'], dx_focal_plane=dx_focal_plane, cold_stop=cold_stop)
+            sig = detection_chain(input_field, self.dm, self.FPM_off, self.det, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True, replace_nan_with=replace_nan_with)
         
         return( sig )
     
         
-def baldr_closed_loop(input_screen_fits, zwfs, control_key, Hmag, throughput, Ku, Nint,return_intermediate_products=False):
+def baldr_closed_loop(input_screen_fits, zwfs, control_key, Hmag, throughput, Ku, Nint,return_intermediate_products=False, replace_nan_with=None):
     """
     re
 
@@ -1099,7 +1109,7 @@ def baldr_closed_loop(input_screen_fits, zwfs, control_key, Hmag, throughput, Ku
     t = np.arange( 0, ao_1_screens_fits[0].header['HIERARCH iterations'] * dt, dt )
         
     Hmag_at_vltiLab = Hmag  - 2.5*np.log10(throughput)
-    flux_at_vltilab = star2photons('H',Hmag_at_vltiLab,airmass=1,k=0.18,ph_m2_s_nm=True) #ph/m2/s/nm
+    flux_at_vltilab = star2photons('H',Hmag_at_vltiLab,airmass=1, k=0.18, ph_m2_s_nm=True) #ph/m2/s/nm
 
     # simulation time grid for baldr (only need to consider up to integration time)       
     dt_baldr = zwfs.mode['detector']['DIT']
@@ -1156,7 +1166,7 @@ def baldr_closed_loop(input_screen_fits, zwfs, control_key, Hmag, throughput, Ku
     #S_filt = np.array([ s if i<len(S)-30 else 0 for i, s in enumerate(S)  ])
     S_filt =  np.hstack( (np.ones(len(S)-2) , np.zeros(2) ))
     # just use at begining of observsation (don't update)
-    sig_turb_off = zwfs.detection_chain( ao_1_fields[-1] , FPM_on=False) #intensity measured on sky with phase mask out
+    sig_turb_off = zwfs.detection_chain( ao_1_fields[-1] , FPM_on=False, replace_nan_with=replace_nan_with) #intensity measured on sky with phase mask out
     
     Nph_obj = np.sum(sig_turb_off.signal) # sum of intensities (#photons) of on sky source with mask out 
     
@@ -1217,7 +1227,7 @@ def baldr_closed_loop(input_screen_fits, zwfs, control_key, Hmag, throughput, Ku
         #cmd_tm1 = cmd
         
         #now detect our baldr corrected field 
-        sig_turb = zwfs.detection_chain(baldr_corrrected_field, FPM_on=True)  #intensity measured on sky with phase mask in
+        sig_turb = zwfs.detection_chain(baldr_corrrected_field, FPM_on=True, replace_nan_with=replace_nan_with)  #intensity measured on sky with phase mask in
         
         if return_intermediate_products:
             DM_shape[tb] = zwfs.dm.surface 
@@ -1260,7 +1270,7 @@ def init_a_field( Hmag, mode, wvls, pup_geometry, D_pix, dx, r0=0.1, L0=25, phas
     Hmag : TYPE - float
         DESCRIPTION. H magnitude of field
     mode : TYPE- string or int 
-        DESCRIPTION. either 'Kolmogorov' or a Noll index (int) of zernike mode:
+        DESCRIPTION. either 'Kolmogorov' or a Noll index (int) of zernike mode: [0,1,2,.. etc] cooresponds to :
             ['Piston', 'Tilt X', 'Tilt Y', 'Focus', 'Astigmatism 45', 'Astigmatism 0', 'Coma Y', 'Coma X', 'Trefoil Y', 'Trefoil X', 'Spherical', '2nd Astig 0', '2nd Astig 45', 'Tetrafoil 0', 'Tetrafoil 22.5', '2nd coma X', '2nd coma Y', '3rd Astig X', '3rd Astig Y'])
     wvls : TYPE. array like
         DESCRIPTION. wavelengths to create field at 
@@ -1319,7 +1329,7 @@ def init_a_field( Hmag, mode, wvls, pup_geometry, D_pix, dx, r0=0.1, L0=25, phas
 
 
     
-def detection_chain(input_field, dm, FPM, det, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True, nx_size_focal_plane = None, dx_focal_plane=None, cold_stop=None):
+def detection_chain(input_field, dm, FPM, det, include_shotnoise=True, ph_per_s_per_m2_per_nm=True, grids_aligned=True, replace_nan_with=None):
     """
     This is the old one - we now do this as a method within ZWFS object
     # apply DM correction 
@@ -1342,7 +1352,13 @@ def detection_chain(input_field, dm, FPM, det, include_shotnoise=True, ph_per_s_
         DESCRIPTION. The default is True.
     grids_aligned : TYPE:boolean, optional
         DESCRIPTION. The default is True.
-
+    replace_nan_with : Type None or number 
+        DESCRIPTION. The default is None. 
+        
+    !!! important !!! If you have pupil offsets or any nan values than unless you must replace_nan_with a finite number to get valid results 
+    (otherwise detection signal will be pure nan. A sensible choice considering nan arise when field is not aligned with DM (for example))
+    is replace_nan_with=0
+    
     Returns
     -------
     signal from the detector
@@ -1351,7 +1367,7 @@ def detection_chain(input_field, dm, FPM, det, include_shotnoise=True, ph_per_s_
     
 
     input_field_dm = input_field.applyDM(dm) # apply DM phase shifts
-    output_field = FPM.get_output_field( input_field_dm,  nx_size_focal_plane = nx_size_focal_plane, dx_focal_plane = dx_focal_plane,  keep_intermediate_products=False, cold_stop=cold_stop )
+    output_field = FPM.get_output_field( input_field_dm,   keep_intermediate_products=False, replace_nan_with=replace_nan_with )
     output_field.define_pupil_grid(dx=input_field.dx, D_pix=input_field.D_pix)
     
     sig = det.detect_field( output_field, include_shotnoise=include_shotnoise, ph_per_s_per_m2_per_nm=ph_per_s_per_m2_per_nm, grids_aligned=grids_aligned)
@@ -1434,7 +1450,7 @@ def create_control_basis(dm, N_controlled_modes, basis_modes='zernike'):
     return(control_basis)
 
 
-def build_IM(calibration_field, dm, FPM, det, control_basis, pokeAmp=50e-9):
+def build_IM(calibration_field, dm, FPM, det, control_basis, pokeAmp=50e-9,replace_nan_with=None):
     """
     
 
@@ -1469,12 +1485,12 @@ def build_IM(calibration_field, dm, FPM, det, control_basis, pokeAmp=50e-9):
     
     
     # get the reference signal from calibration field with phase mask in
-    sig_on_ref = detection_chain(calibration_field, dm, FPM, det)
-    sig_on_ref.signal = np.mean( [detection_chain(calibration_field, dm, FPM, det).signal for _ in range(10)]  , axis=0) # average over a few 
+    sig_on_ref = detection_chain(calibration_field, dm, FPM, det,replace_nan_with=replace_nan_with)
+    sig_on_ref.signal = np.mean( [detection_chain(calibration_field, dm, FPM, det,replace_nan_with).signal for _ in range(10)]  , axis=0) # average over a few 
     
     # estimate #photons of in calibration field by removing phase mask (zero phase shift)   
-    sig_off_ref = detection_chain(calibration_field, dm, FPM_cal, det)
-    sig_off_ref.signal = np.mean( [detection_chain(calibration_field, dm, FPM_cal, det).signal for _ in range(10)]  , axis=0) # average over a few 
+    sig_off_ref = detection_chain(calibration_field, dm, FPM_cal, det,replace_nan_with=replace_nan_with)
+    sig_off_ref.signal = np.mean( [detection_chain(calibration_field, dm, FPM_cal, det,replace_nan_with=replace_nan_with).signal for _ in range(10)]  , axis=0) # average over a few 
     Nph_cal = np.sum(sig_off_ref.signal) # Nph when phase mask is out 
     
     cmd = np.zeros( dm.surface.reshape(-1).shape ) 
@@ -1486,7 +1502,7 @@ def build_IM(calibration_field, dm, FPM, det, control_basis, pokeAmp=50e-9):
         
         dm.update_shape(cmd)
     
-        sig = detection_chain(calibration_field, dm, FPM, det)
+        sig = detection_chain(calibration_field, dm, FPM, det,replace_nan_with=replace_nan_with)
         #average over a few 
         sig.signal = np.mean( [detection_chain(calibration_field, dm, FPM, det).signal for _ in range(10)] ,axis=0)
         modal_signal_list.append( sig ) 
