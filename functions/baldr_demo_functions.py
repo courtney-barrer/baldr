@@ -26,8 +26,10 @@ import os
 import numpy as np
 import pandas as pd
 import copy
+import time 
 import matplotlib.pyplot as plt
-import time
+#import time
+import datetime
 from scipy.interpolate import interp2d, interp1d
 from scipy.stats import poisson
 from astropy.io import fits
@@ -38,6 +40,7 @@ import FliSdk_V2
 #import astropy.constants as cst
 #import astropy.units as u
 
+path_to_dm_flat_map = "/opt/Boston Micromachines/Shapes/17DW019#053_FLAT_MAP_COMMANDS.txt"
 
 #cal_dict = {bi}
 def calibrate_raw_image(im,cal_dict):
@@ -125,8 +128,8 @@ def set_fsp_dit( context, fps, tint=None):
         print(f'for selected FPS integration time (tint) must be between {minTint*1e3} - {maxTint*1e3}ms')
         
         if tint == None:
-            print(f'setting integration time to minimum ({minTint*1e3}) given the provided frame rate')
-            FliSdk_V2.FliSerialCamera.SendCommand(context, "set tint " + str(minTint) )
+            print(f'setting integration time to maximum ({maxTint*1e3}) given the provided frame rate')
+            FliSdk_V2.FliSerialCamera.SendCommand(context, "set tint " + str(maxTint) )
             
         elif (tint<=maxTint*1e3) & (tint >= minTint*1e3):
         
@@ -145,7 +148,23 @@ def set_fsp_dit( context, fps, tint=None):
             print("Error while updating SDK.")
             exit()
         return(context) 
+
+ 
+def get_camera_info(camera):
+    camera_info_dict = {} 
+    # query camera and DM settings 
+    fps_res, fps_response = FliSdk_V2.FliSerialCamera.GetFps(camera)
+    tint_res, tint_response = FliSdk_V2.FliSerialCamera.SendCommand(camera, "tint raw")
+    #no_actuators
     
+    #camera headers
+    camera_info_dict['timestamp'] = str(datetime.datetime.now()) 
+    camera_info_dict['camera'] = FliSdk_V2.GetCurrentCameraName(camera) 
+    camera_info_dict['camera_fps'] = fps_response
+    camera_info_dict['camera_tint'] = tint_response
+    
+    return(camera_info_dict)
+        
 def measure_bias():
     print('to do')
     
@@ -158,7 +177,7 @@ def measure_flat():
 def apply_flat_correction():
     print('to do')    
     
-def set_up_DM(DM_serial_number=''):
+def set_up_DM(DM_serial_number='17DW019#053'):
     dm = bmc.BmcDm() # init DM object
     err_code = dm.open_dm(DM_serial_number) # open DM
     if err_code:
@@ -166,24 +185,10 @@ def set_up_DM(DM_serial_number=''):
         raise Exception(dm.error_string(err_code))
     
     return(dm, err_code)
-    
-def get_camera_info(camera):
-    camera_info_dict = {} 
-    # query camera and DM settings 
-    fps_res, fps_response = FliSdk_V2.FliSerialCamera.GetFps(camera)
-    tint_res, tint_response = FliSdk_V2.FliSerialCamera.SendCommand(context, "tint raw")
-    #no_actuators
-    
-    #camera headers
-    camera_info_dict['timestamp'] = str(datetime.datetime.now()) 
-    camera_info_dict['camera'] = FliSdk_V2.GetCurrentCameraName(camera) 
-    camera_info_dict['camera_fps'] = fps_res 
-    camera_info_dict['camera_tint'] = tint_res*1e-3 
-    
-    return(camera_info_dict)
-    
-    
-def apply_sequence_to_DM_and_record_images(DM, camera, DM_command_sequence, number_images_recorded_per_cmd = 1, save_dm_cmds = True, calibration_dict=None, save_fits = None):
+   
+
+   
+def apply_sequence_to_DM_and_record_images(DM, camera, DM_command_sequence, number_images_recorded_per_cmd = 1, save_dm_cmds = True, calibration_dict=None, additional_header_labels=None, save_fits = None):
     """
     
 
@@ -193,14 +198,19 @@ def apply_sequence_to_DM_and_record_images(DM, camera, DM_command_sequence, numb
         DESCRIPTION. DM Object from BMC SDK. Initialized 
     camera : TYPE camera objection from FLI SDK.
         DESCRIPTION. Camera context from FLISDK. Initialized from context = FliSdk_V2.Init() 
-    DM_command_sequence : TYPE
-        DESCRIPTION.
+    DM_command_sequence : TYPE list 
+        DESCRIPTION. Nc x Na matrix where Nc is number of commands to send in sequence (rows)
+        Na is number actuators on DM (columns).   
     number_images_recorded_per_cmd : TYPE, optional
         DESCRIPTION. The default is 1. puting a value >= 0 means no images are recorded.
     calibration_dict: TYPE, optional
         DESCRIPTION. The default is None meaning saved images don't get flat fielded. 
         if flat fielding is required a dictionary must be supplied that contains 
         a bias, dark and flat frame under keys 'bias', 'dark', and 'flat' respectively
+    additional_header_labels : TYPE, optional
+        DESCRIPTION. The default is None which means no additional header is appended to fits file 
+        otherwise a tuple (header, value) or list of tuples [(header_0, value_0)...] can be used. 
+        If list, each item in list will be added as a header. 
     save_fits : TYPE, optional
         DESCRIPTION. The default is None which means images are not saved, 
         if a string is provided images will be saved with that name in the current directory
@@ -221,49 +231,56 @@ def apply_sequence_to_DM_and_record_images(DM, camera, DM_command_sequence, numb
     except:
         raise TypeError('cannot convert "number_images_recorded_per_cmd" to a integer. Check input type')
     
-    image_list = []
+    image_list = [] #init list to hold images
+    FliSdk_V2.Start(camera) # start camera
     for cmd in DM_command_sequence:
-    
-        DM.apply_command(cmd)
-    
+        # wait a sec        
+        time.sleep(0.01)
+        # ok, now apply command
+        DM.send_data(cmd)
+        # wait another sec
+        time.sleep(0.01)
+
         if should_we_record_images: 
             
-            image_list.append( [FliSdk_V2.GetRawImageAsNumpyArray(context,-1)  for i in range(number_images_recorded_per_cmd)] )
-
+            image_list.append( [FliSdk_V2.GetRawImageAsNumpyArray(camera,-1)  for i in range(number_images_recorded_per_cmd)] )
+    
+    FliSdk_V2.Stop(camera) # stop camera
+    
     # init fits files if necessary
     if should_we_record_images: 
         
-        data = fits.HDUList([]) 
+        data = fits.HDUList([]) #init main fits file to append things to
         
         # Camera data
         cam_fits = fits.PrimaryHDU( image_list )
-        if save_dm_cmds:
-            dm_fits = fits.PrimaryHDU( DM_command_sequence )
-        
-        # query camera and DM settings 
-        fps_res, fps_response = FliSdk_V2.FliSerialCamera.GetFps(camera)
-        tint_res, tint_response = FliSdk_V2.FliSerialCamera.SendCommand(context, "tint raw")
-        #no_actuators
         
         #camera headers
         camera_info_dict = get_camera_info(camera)
-        for k,v in items( camera_info_dict ):
+        for k,v in camera_info_dict.items():
             cam_fits.header.set(k,v)
         cam_fits.header.set('#images per DM command', number_images_recorded_per_cmd )
-        #cam_fits.header.set('timestamp', str(datetime.datetime.now()) )
-        #cam_fits.header.set('camera', FliSdk_V2.GetCurrentCameraName(camera) )
-        #cam_fits.header.set('camera_fps', fps_res )
-        #cam_fits.header.set('camera_tint', tint_res*1e-3 )
         
-             
+        #if user specifies additional headers using additional_header_labels
+        if (additional_header_labels!=None): 
+            if type(additional_header_labels)==list:
+                for i,h in enumerate(additional_header_labels):
+                    cam_fits.header.set(h[0],h[1])
+            else:
+                cam_fits.header.set(additional_header_labels[0],additional_header_labels[1])
+
         # add camera data to main fits
         data.append(cam_fits)
         
         if save_dm_cmds:
+            # put commands in fits format
+            dm_fits = fits.PrimaryHDU( DM_command_sequence )
             #DM headers 
             dm_fits.header.set('timestamp', str(datetime.datetime.now()) )
             #dm_fits.header.set('DM', DM.... )
             #dm_fits.header.set('#actuators', DM.... )
+
+            # append to the data
             data.append(dm_fits)
         
         if save_fits!=None:
@@ -311,24 +328,24 @@ def scan_detector_framerates(camera, frame_rates, number_images_recorded_per_cmd
     data = fits.HDUList([]) 
     for fps in frame_rates:
         
-        set_fsp_dit( camera, fps, tint=None) # set mimimu dit (tint=None) for given fps
+        camera = set_fsp_dit( camera, fps, tint=None) # set max dit (tint=None) for given fps
         
-        tmp_fits = fits.PrimaryHDU( [FliSdk_V2.GetRawImageAsNumpyArray(context,-1)  for i in range(number_images_recorded_per_cmd)] )
-        tmp_fits.header.set('frames per second' , fps)
-        
-    
-    for i in image_list: 
-        
-        tmp_fits = fits.PrimaryHDU( i )
+        FliSdk_V2.Start(camera) # start camera
+	
+        time.sleep(1) # wait 1 second
+        #tmp_fits = fits.PrimaryHDU( [FliSdk_V2.GetProcessedImageGrayscale16bNumpyArray(camera,-1)  for i in range(number_images_recorded_per_cmd)] )
+        tmp_fits = fits.PrimaryHDU( [FliSdk_V2.GetRawImageAsNumpyArray(camera,-1)  for i in range(number_images_recorded_per_cmd)] )
         
         camera_info_dict = get_camera_info(camera)
-        for k,v in items( camera_info_dict ):
-            tmp_fits.header.set(k,v)
+        for k,v in camera_info_dict.items():
+            tmp_fits.header.set(k,v)     
 
-    data.append( tmp_fits )
+        data.append( tmp_fits )
+
+        FliSdk_V2.Stop(camera) # stop camera
     
     if save_fits!=None:
-        if type(save_images)==str:
+        if type(save_fits)==str:
             data.writeto(save_fits)
         else:
             raise TypeError('save_images needs to be either None or a string indicating where to save file')
