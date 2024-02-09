@@ -21,7 +21,8 @@ For this we create generic structures:
  subtracting a bias frame from a dark frame
 """
 
-import pyzelda.utils.zernike as zernike
+
+import os 
 import numpy as np
 import pandas as pd
 import copy
@@ -30,6 +31,7 @@ import time
 from scipy.interpolate import interp2d, interp1d
 from scipy.stats import poisson
 from astropy.io import fits
+import pyzelda.utils.zernike as zernike
 import bmc
 os.chdir('/opt/FirstLightImaging/FliSdk/Python/demo/')
 import FliSdk_V2 
@@ -37,7 +39,7 @@ import FliSdk_V2
 #import astropy.units as u
 
 
-cal_dict = {bi}
+#cal_dict = {bi}
 def calibrate_raw_image(im,cal_dict):
     #flat fiedling https://en.wikipedia.org/wiki/Flat-field_correction 
     # bias frames https://en.wikipedia.org/wiki/Bias_frame
@@ -51,32 +53,32 @@ def calibrate_raw_image(im,cal_dict):
     return( cal_im )
     
 def setup_camera(cameraIndex=0):
-	context = FliSdk_V2.Init() # init camera object
-	listOfGrabbers = FliSdk_V2.DetectGrabbers(context)
-	listOfCameras = FliSdk_V2.DetectCameras(context)
-	# print some info and exit if nothing detected 
-	if len(listOfGrabbers) == 0:
-	    print("No grabber detected, exit.")
-	    exit()
-	if len(listOfCameras) == 0:
-	    print("No camera detected, exit.")
-	    exit()
-	for i,s in enumerate(listOfCameras):
-	    print("- " + str(i) + " -> " + s)
-	print('note we always default to cameraIndex=0 if cameraIndex is not provided')
-	# set the camera 
-	ok = FliSdk_V2.SetCamera(context, listOfCameras[cameraIndex])
-	if not ok:
-	    print("Error while setting camera.")
-	    exit()
-	print("Setting mode full.")
-	FliSdk_V2.SetMode(context, FliSdk_V2.Mode.Full)
-	print("Updating...")
-	ok = FliSdk_V2.Update(context)
-	if not ok:
-	    print("Error while updating SDK.")
-	    exit()
-	return(context) 
+    context = FliSdk_V2.Init() # init camera object
+    listOfGrabbers = FliSdk_V2.DetectGrabbers(context)
+    listOfCameras = FliSdk_V2.DetectCameras(context)
+    # print some info and exit if nothing detected 
+    if len(listOfGrabbers) == 0:
+        print("No grabber detected, exit.")
+        exit()
+    if len(listOfCameras) == 0:
+        print("No camera detected, exit.")
+        exit()
+    for i,s in enumerate(listOfCameras):
+        print("- " + str(i) + " -> " + s)
+    print('note we always default to cameraIndex=0 if cameraIndex is not provided')
+    # set the camera 
+    ok = FliSdk_V2.SetCamera(context, listOfCameras[cameraIndex])
+    if not ok:
+        print("Error while setting camera.")
+        exit()
+    print("Setting mode full.")
+    FliSdk_V2.SetMode(context, FliSdk_V2.Mode.Full)
+    print("Updating...")
+    ok = FliSdk_V2.Update(context)
+    if not ok:
+        print("Error while updating SDK.")
+        exit()
+    return(context) 
 
 def set_fsp_dit( context, fps, tint=None): 
     """
@@ -335,7 +337,7 @@ def scan_detector_framerates(camera, frame_rates, number_images_recorded_per_cmd
 
 
 
-def construct_command_basis(DM ,flat_map, basis='Zernike', , number_of_modes = 20):
+def construct_command_basis(DM ,flat_map, basis='Zernike', number_of_modes = 20):
     
     Nx_act = dm.num_actuators_width() # number of actuators across diameter of DM.
     
@@ -354,7 +356,10 @@ def construct_command_basis(DM ,flat_map, basis='Zernike', , number_of_modes = 2
         
     # DM is 12x12 without the corners, so mask them with nan and drop them
     corner_indices = 0, Nx_act-1, Nx_act * (Nx_act-1), -1
-    
+
+flat_map = pd.read_csv("/opt/Boston Micromachines/Shapes/17DW019#053_FLAT_MAP_COMMANDS.txt",header=None)[0].values 
+
+
 """
 # how to deal with corners 
 # we have an image and a control matrix which is pseudo inverse of IM
@@ -381,11 +386,11 @@ def indentify_valid_camera_regions():
     
 """    
 
-
+"""
 #%% 
-
+dm_name = '17DW019#053'
 # zero_DM 
-flat_map = pd.read_csv("/home/heimdallr/Documents/17DW019#122_FLAT_MAP_COMMANDS.txt",header=None)[0].values
+flat_map = pd.read_csv("/home/heimdallr/Documents/17DW019#053_FLAT_MAP_COMMANDS.txt",header=None)[0].values
 
 dm.send_data(flat_map) #send the flatmap cmds to DM 
 
@@ -411,4 +416,4 @@ dm, dm_errcode = set_up_DM(DM_serial_number='')
 # start camera 
 FliSdk_V2.Start(context)
 
-
+"""
