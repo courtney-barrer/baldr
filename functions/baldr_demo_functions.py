@@ -399,7 +399,16 @@ def create_phase_screen_cmd_for_DM(scrn, DM, flat_reference, scaling_factor=0.1,
 
 
 
-
+def _set_regions_manually(xyr_list):
+    x = float(input('center x'))
+    y = float(input('center y'))
+    r = float(input('cirlce radius'))
+    xyr_list.append((x,y,r))
+    repeat = int(input('add another regions? input 1 if yes, 0 if no'))
+    if repeat:
+        _set_regions_manually(xyr_list)
+        
+    return(xyr_list) 
 
 def detect_pupil_and_PSF_region(camera, fps = 600 , plot_results = True, save_fits = None): 
 
@@ -410,7 +419,7 @@ def detect_pupil_and_PSF_region(camera, fps = 600 , plot_results = True, save_fi
     
     # detect circles, we can play with minDist, param1, param2 to optimize if re-alligned 
     #circles = cv2.HoughCircles(gray_scale_image, method=cv2.HOUGH_GRADIENT, dp=1,minDist=50,param1=5,param2=16,minRadius=0,maxRadius=0)
-    circles = cv2.HoughCircles(gray_scale_image, method=cv2.HOUGH_GRADIENT, dp=1,minDist=50,param1=11,param2=36,minRadius=10,maxRadius=100)
+    circles = cv2.HoughCircles(gray_scale_image, method=cv2.HOUGH_GRADIENT, dp=1,minDist=50,param1=11,param2=36,minRadius=10,maxRadius=100)[0]
     #detect circles in image
     #circles = np.uint16(np.around(circles)) #[[(x0,y0,r0),..,(xN,yN,rN)]]
     
@@ -419,7 +428,7 @@ def detect_pupil_and_PSF_region(camera, fps = 600 , plot_results = True, save_fi
         plt.imshow(np.log10( np.array(gray_scale_image,dtype=float) ) )
         
         pltcircle = []
-        for x,y,r in circles[0]:
+        for x,y,r in circles:
             pltcircle.append( plt.Circle((x,y), r, facecolor='None', edgecolor='r', lw=1,label='detected region'))
 
         for c in pltcircle:
@@ -427,7 +436,28 @@ def detect_pupil_and_PSF_region(camera, fps = 600 , plot_results = True, save_fi
             plt.legend()
         plt.show() 
 
-    
+
+    set_regions_manually = float(input('if you are happy with detected regions input 0, otherwise input 1 to manually set masked regions.'))
+
+            
+    if set_regions_manually:
+        circles = [] #re-initialize circles 
+        _set_regions_manually(circles)
+
+    if plot_results:
+        plt.figure(figsize=(8,5))
+        plt.imshow(np.log10( np.array(gray_scale_image,dtype=float) ) )
+        
+        pltcircle = []
+        for x,y,r in circles:
+            pltcircle.append( plt.Circle((x,y), r, facecolor='None', edgecolor='r', lw=1,label='detected region'))
+
+        for c in pltcircle:
+            plt.gca().add_patch(c)
+            plt.legend()
+        plt.show()         
+
+
     if save_fits!=None:
         fits2save = fits.PrimaryHDU( data )
         #write camera info to headers 
@@ -443,11 +473,8 @@ def detect_pupil_and_PSF_region(camera, fps = 600 , plot_results = True, save_fi
         else:
             raise TypeError('save_images needs to be either None or a string indicating where to save file')
         
-    repeat = input('input 1 to manually set masked regions. Otherwise 0.')
-    if repeat:
-        print('TO DO, create small funciton to get user input x,y,r and ask if want another circle')
-        
-    return(circles[0])
+
+    return(circles)
 
 
 
