@@ -30,6 +30,7 @@ import time
 import matplotlib.pyplot as plt
 #import time
 import datetime
+import cv2
 from scipy.interpolate import interp2d, interp1d
 from scipy.stats import poisson
 from astropy.io import fits
@@ -354,9 +355,109 @@ def scan_detector_framerates(camera, frame_rates, number_images_recorded_per_cmd
 
 
 
+
+def create_phase_screen_cmd_for_DM(scrn, DM, flat_reference, scaling_factor=0.1, drop_indicies = None, plot_cmd=False):
+    """
+    aggregate a scrn (aotools.infinitephasescreen object) onto a DM command space. phase screen is normalized by
+    between +-0.5 and then scaled by scaling_factor and offset by flat_reference command. Final DM command values should
+    always be between 0-1. phase screens are usually a NxN matrix, while DM is MxM with some missing pixels (e.g. 
+    corners). drop_indicies is a list of indicies in the flat MxM DM array that should not be included in the command space. 
+    """
+
+    #print('----------\ncheck phase screen size is multiple of DM\n--------')
+    
+    Nx_act = DM.num_actuators_width() #number of actuators across DM diameter
+    
+    scrn_array = ( scrn.scrn - np.min(scrn.scrn) ) / (np.max(scrn.scrn) - np.min(scrn.scrn)) - 0.5 # normalize phase screen between -0.5 - 0.5 
+    
+    size_factor = int(scrn_array.shape[0] / Nx_act) # how much bigger phase screen is to DM shape in x axis. Note this should be an integer!!
+    
+    # reshape screen so that axis 1,3 correspond to values that should be aggregated 
+    scrn_to_aggregate = scrn_array.reshape(scrn_array.shape[0]//size_factor, size_factor, scrn_array.shape[1]//size_factor, size_factor)
+    
+    # now aggreagate and apply the scaling factor 
+    scrn_on_DM = scaling_factor * np.mean( scrn_to_aggregate, axis=(1,3) ).reshape(-1) 
+
+    #If DM is missing corners etc we set these to nan and drop them before sending the DM command vector
+    #dm_cmd =  scrn_on_DM.to_list()
+    if drop_indicies != None:
+        for i in drop_indicies:
+            scrn_on_DM[i]=np.nan
+             
+    if plot_cmd: #can be used as a check that the command looks right!
+        fig,ax = plt.subplots(1,2,figsize=(12,6))
+        im0 = ax[0].imshow(np.mean(flat_reference) + scrn_on_DM.reshape([Nx_act,Nx_act]) )
+        ax[0].set_title('DM command (averaging offset)')
+        im1 = ax[1].imshow(scrn.scrn)
+        ax[1].set_title('original phase screen')
+        plt.colorbar(im0, ax=ax[0])
+        plt.colorbar(im1, ax=ax[1]) 
+        plt.show() 
+
+    dm_cmd =  list( flat_reference + scrn_on_DM[np.isfinite(scrn_on_DM)] ) #drop non-finite values which should be nan values created from drop_indicies array
+    return(dm_cmd) 
+
+
+
+
+
+def detect_pupil_and_PSF_region(camera, fps = 600 , plot_results = True, save_fits = None): 
+
+    data = scan_detector_framerates(camera, [fps], number_images_recorded_per_cmd = 50, save_fits = None)
+     
+    im = np.median( data[0].data, axis=0 ) #take median of however many images we recorded
+    gray_scale_image = np.array( 2**8 * (im - np.min(im)) / (np.max(im) - np.min(im)) , dtype = np.uint8 )
+    
+    # detect circles, we can play with minDist, param1, param2 to optimize if re-alligned 
+    #circles = cv2.HoughCircles(gray_scale_image, method=cv2.HOUGH_GRADIENT, dp=1,minDist=50,param1=5,param2=16,minRadius=0,maxRadius=0)
+    circles = cv2.HoughCircles(gray_scale_image, method=cv2.HOUGH_GRADIENT, dp=1,minDist=50,param1=11,param2=36,minRadius=10,maxRadius=100)
+    #detect circles in image
+    #circles = np.uint16(np.around(circles)) #[[(x0,y0,r0),..,(xN,yN,rN)]]
+    
+    if plot_results:
+        plt.figure(figsize=(8,5))
+        plt.imshow(np.log10( np.array(gray_scale_image,dtype=float) ) )
+        
+        pltcircle = []
+        for x,y,r in circles[0]:
+            pltcircle.append( plt.Circle((x,y), r, facecolor='None', edgecolor='r', lw=1,label='detected region'))
+
+        for c in pltcircle:
+            plt.gca().add_patch(c)
+            plt.legend()
+        plt.show() 
+
+    
+    if save_fits!=None:
+        fits2save = fits.PrimaryHDU( data )
+        #write camera info to headers 
+        camera_info_dict = get_camera_info(camera)
+        for k,v in camera_info_dict.items():
+            data.header.set(k,v) 
+        #write dected circles to headers
+        for i, (x,y,r) in enumerate(circles[0]):
+            data.header.set(f'circle_{i}_xyr',f'({x},{y},{r})') 
+        #try write fits 
+        if type(save_fits)==str:
+            fits2save.writeto(save_fits)
+        else:
+            raise TypeError('save_images needs to be either None or a string indicating where to save file')
+        
+    repeat = input('input 1 to manually set masked regions. Otherwise 0.')
+    if repeat:
+        print('TO DO, create small funciton to get user input x,y,r and ask if want another circle')
+        
+    return(circles[0])
+
+
+
+
+
+
+
 def construct_command_basis(DM ,flat_map, basis='Zernike', number_of_modes = 20):
     
-    Nx_act = dm.num_actuators_width() # number of actuators across diameter of DM.
+    Nx_act = DM.num_actuators_width() # number of actuators across diameter of DM.
     
     # to deal with
     if np.mod( Nx_act,2 )==0:
@@ -375,6 +476,9 @@ def construct_command_basis(DM ,flat_map, basis='Zernike', number_of_modes = 20)
     corner_indices = 0, Nx_act-1, Nx_act * (Nx_act-1), -1
 
 flat_map = pd.read_csv("/opt/Boston Micromachines/Shapes/17DW019#053_FLAT_MAP_COMMANDS.txt",header=None)[0].values 
+
+
+
 
 
 """
