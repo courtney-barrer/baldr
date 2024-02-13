@@ -34,6 +34,7 @@ import cv2
 from scipy.interpolate import interp2d, interp1d
 from scipy.stats import poisson
 from astropy.io import fits
+import aotools
 import pyzelda.utils.zernike as zernike
 import bmc
 os.chdir('/opt/FirstLightImaging/FliSdk/Python/demo/')
@@ -189,7 +190,7 @@ def set_up_DM(DM_serial_number='17DW019#053'):
    
 
    
-def apply_sequence_to_DM_and_record_images(DM, camera, DM_command_sequence, number_images_recorded_per_cmd = 1, save_dm_cmds = True, calibration_dict=None, additional_header_labels=None, save_fits = None):
+def apply_sequence_to_DM_and_record_images(DM, camera, DM_command_sequence, number_images_recorded_per_cmd = 1, save_dm_cmds = True, calibration_dict=None, additional_header_labels=None,sleeptime_between_commands=0.01, save_fits = None):
     """
     
 
@@ -215,7 +216,8 @@ def apply_sequence_to_DM_and_record_images(DM, camera, DM_command_sequence, numb
     save_fits : TYPE, optional
         DESCRIPTION. The default is None which means images are not saved, 
         if a string is provided images will be saved with that name in the current directory
-
+    sleeptime_between_commands : TYPE, optional float
+        DESCRIPTION. time to sleep between sending DM commands and recording images in seconds. default is 0.01s
     Returns
     -------
     fits file with images corresponding to each DM command in sequence
@@ -234,13 +236,14 @@ def apply_sequence_to_DM_and_record_images(DM, camera, DM_command_sequence, numb
     
     image_list = [] #init list to hold images
     FliSdk_V2.Start(camera) # start camera
-    for cmd in DM_command_sequence:
+    for cmd_indx, cmd in enumerate(DM_command_sequence):
+        print(f'executing cmd_indx {cmd_indx} / {len(DM_command_sequence)}')
         # wait a sec        
-        time.sleep(0.01)
+        time.sleep(sleeptime_between_commands)
         # ok, now apply command
         DM.send_data(cmd)
         # wait another sec
-        time.sleep(0.01)
+        time.sleep(sleeptime_between_commands)
 
         if should_we_record_images: 
             
@@ -472,9 +475,15 @@ def detect_pupil_and_PSF_region(camera, fps = 600 , plot_results = True, save_fi
             fits2save.writeto(save_fits)
         else:
             raise TypeError('save_images needs to be either None or a string indicating where to save file')
+    
+    buf = float(input('set radius buffer (%)? 0 if none, othersize enter buffer. Final radius will be r+r*buffer'))
+    mask_list = []
+    for x,y,r in circles:
+        mask_tmp = aotools.pupil.circle(radius = r + r*buf, size = np.max(gray_scale_image.shape), circle_centre = (x,y), origin='corner')
+        mask_list.append( mask_tmp[ :gray_scale_image.shape[0], :gray_scale_image.shape[1] ] )
         
-
-    return(circles)
+ 
+    return(mask_list, circles, gray_scale_image)
 
 
 
