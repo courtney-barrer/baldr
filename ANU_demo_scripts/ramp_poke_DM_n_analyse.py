@@ -15,6 +15,7 @@ fig_path = root_path + '/figures/'
 
 os.chdir(root_path)
 from functions import baldr_demo_functions as bdf
+
 """
 want to see predicted sinusoidal change in intensity with ramping phase on single actuator. Can we fit model? 
 """
@@ -98,7 +99,7 @@ for i,(x,y) in enumerate(cmd2pix_registration):
 plt.ylabel('Intensity [adu]',**kwargs)
 plt.xlabel('DM actuator offset [normalized]',**kwargs)
 plt.tight_layout()
-plt.savefig( data_path + 'ramp_poke_DM_n_analyse-zwfs_linearity.png',dpi=300)
+plt.savefig( fig_path + f'ramp_poke_DM_n_analyse-zwfs_linearity_{tstamp}.png',dpi=300)
 plt.show()
 
 # for give poke amp look at SVD and plot detector eigenmodes!
@@ -135,7 +136,7 @@ for i,axx in enumerate(ax.reshape(-1)):
     #plt.legend(ax=axx)
 plt.tight_layout()
 #plt.savefig( data_path + 'ramp_poke_DM_n_analyse-SVD_modes_reference_pupil_FPM-in_{tstamp}.png',dpi=300)
-plt.savefig( data_path + 'ramp_poke_DM_n_analyse-SVD_modes_from_poke_IM_{tstamp}.png',dpi=300)
+plt.savefig( fig_path + f'ramp_poke_DM_n_analyse-SVD_modes_from_poke_IM_{tstamp}.png',dpi=300)
  
 plt.show()
 # filter out piston 

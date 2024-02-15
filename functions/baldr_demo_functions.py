@@ -166,7 +166,25 @@ def get_camera_info(camera):
     camera_info_dict['camera_tint'] = tint_response
     
     return(camera_info_dict)
-        
+   
+def watch_camera(camera, seconds_to_watch = 10, time_between_frames=0.01) :
+    
+    t0= datetime.datetime.now() 
+    plt.figure(figsize=(15,15))
+    plt.ion()
+    FliSdk_V2.Start(camera)     
+    seconds_passed = 0
+    while seconds_passed < seconds_to_watch:
+        a=FliSdk_V2.GetRawImageAsNumpyArray(camera,-1)
+        plt.ion()
+        plt.imshow(a)
+        plt.pause( time_between_frames )
+        plt.clf() 
+        t1 = datetime.datetime.now() 
+        seconds_passed = (t1 - t0).seconds
+    FliSdk_V2.Stop(camera) 
+    plt.close()
+
 def measure_bias():
     print('to do')
     
@@ -242,8 +260,7 @@ def apply_sequence_to_DM_and_record_images(DM, camera, DM_command_sequence, numb
         time.sleep(sleeptime_between_commands)
         # ok, now apply command
         DM.send_data(cmd)
-        # wait another sec
-        time.sleep(sleeptime_between_commands)
+
 
         if should_we_record_images: 
             
@@ -253,7 +270,7 @@ def apply_sequence_to_DM_and_record_images(DM, camera, DM_command_sequence, numb
     
     # init fits files if necessary
     if should_we_record_images: 
-        
+        #cmd2pix_registration
         data = fits.HDUList([]) #init main fits file to append things to
         
         # Camera data
@@ -487,34 +504,131 @@ def detect_pupil_and_PSF_region(camera, fps = 600 , plot_results = True, save_fi
 
 
 
-
-
-
-
-def construct_command_basis(DM ,flat_map, basis='Zernike', number_of_modes = 20):
+def construct_command_basis(DM , basis='Zernike', number_of_modes = 20, actuators_across_diam = 'full',flat_map=None):
     
     Nx_act = DM.num_actuators_width() # number of actuators across diameter of DM.
     
     # to deal with
-    if np.mod( Nx_act,2 )==0:
-        basis = zernike.zernike_basis(nterms=number_of_modes, npix=Nx_act + 4 )
-    else:
-        basis = zernike.zernike_basis(nterms=number_of_modes, npix=Nx_act + 4 )
-
-    basis_name2i = {zernike.zern_name(i):i for i in range(1,30)}
-    basis_i2name = {v:k for k,v in basis_name2i.items()}
-    
-    
-    for b in zwfs.control_variables['control_20_zernike_modes']['control_basis']:
-        bmcdm_basis.append( 0.5 - (b - b.min()) / (b.max() - b.min()) )  #normalized between 0-1 
+    if basis == 'Zernike':
+        if actuators_across_diam == 'full':
+            # NOTE WE DO PUPIL OVER 4 MORE PIXELS TO FILL SQUARE LIKE DM AND CROP ACCORDINGLY - THIS FITS NICELY THE MULTI-3.5-BMC DM SHAPE
+            raw_basis = zernike.zernike_basis(nterms=number_of_modes, npix=Nx_act + 4 )
         
-    # DM is 12x12 without the corners, so mask them with nan and drop them
-    corner_indices = 0, Nx_act-1, Nx_act * (Nx_act-1), -1
+            bmcdm_basis_list = []
+            for i,b in enumerate(raw_basis):
 
-flat_map = pd.read_csv("/opt/Boston Micromachines/Shapes/17DW019#053_FLAT_MAP_COMMANDS.txt",header=None)[0].values 
+                m = b[2:-2,2:-2].copy() # we crop to actual DM size 
+                # make mode piston free on pupil basis
+                m -= np.nanmean( m )
+                # normalize mode so that variance = <b|b> = 1 rms in command space ([0,1] bounds)
+                if i!=0: # we dont do piston since we have put piston to zero in first step
+                    m *= 1/np.sqrt(np.nansum(m*m))
+                if (np.nanmax(m)>0.5) or (np.nanmin(m)<-0.5):
+                    print(f'mode {i} rms = {np.nansum(m*m)} but has single actuator commands outside [0,1] range. Specifically \nnp.nanmax(m) ={np.nanmax(m)}\nnp.nanmin(m) ={np.nanmin(m)}')
+                if flat_map == None:
+                    m += 0.5 #center mode at half the actuator range
+                else: 
+                    m += flat_map # center mode at the DM flat map 
+                # drop corner indicies which should be nan values. This automatically flattens the array as needed
+                bmcdm_basis_list.append( m[np.isfinite(m)] ) 
+    
+        else: # specified actuator number across DM
+            raw_basis = zernike.zernike_basis(nterms=number_of_modes, npix=actuators_across_diam)
+            corner_indices = [0, Nx_act-1, Nx_act * (Nx_act-1), -1]
+            raise TypeError('to do - deal with outside circular region')
+        
+        bmcdm_basis_dict = {zernike.zern_name(i+1):b for i,b in enumerate(bmcdm_basis_list)}
+
+    return(bmcdm_basis_dict)
 
 
+def get_DM_command_in_2D(cmd,Nx_act=12):
+    #puts nan values in cmd positions that don't correspond to actuator on a square grid until cmd length is square number (12x12 for BMC multi-2.5 DM) so can be reshaped to 2D array to see what the command looks like on the DM. 
+    corner_indices = [0, Nx_act-1, Nx_act * (Nx_act-1), Nx_act*Nx_act]
+    cmd_in_2D = list(cmd.copy())
+    for i in corner_indices:
+        cmd_in_2D.insert(i,np.nan)
+    return( np.array(cmd_in_2D).reshape(12,12) )
+    
 
+def get_reference_pupils(DM, camera, fps, flat_map, number_images_recorded_per_cmd=50, crop=None, save_fits=None):
+    """
+    beam aligned on phase dot, we grab some images of FPM in ( I(theta=phi/2 ) )
+    then apply offset so that FPM is out ( I(theta=0 ) ) and record these two images 
+
+    """
+    # make our low order basis in command space 
+    basis = construct_command_basis(DM , basis='Zernike', number_of_modes = 3, actuators_across_diam = 'full',flat_map=None)
+    
+    #flat DM 
+    DM.send_data( flat_map )  
+    
+    #define command sequence
+    DM_command_sequence = [flat_map]
+
+    print('\n=======\n ADJUST FOCAL PLANE MASK SO THAT DOT IS OFF AXIS (NO PHASE SHIFT APPLIED!)') 
+
+    seconds_to_watch = float(input('input how many seconds do you need to watch the camera for to make manual adjustment to FPM?'))
+
+    watch_camera(camera, seconds_to_watch = seconds_to_watch, time_between_frames=0.05)
+    plt.close()
+
+    # RECORD FPM-OUT IMAGE 
+    data_fpm_out = apply_sequence_to_DM_and_record_images(DM, camera, DM_command_sequence, number_images_recorded_per_cmd = 50, save_dm_cmds = True, calibration_dict=None, additional_header_labels=[('FPM_status','OUT')],sleeptime_between_commands=0.01, save_fits = None)
+
+    print('\n=======\n ADJUST FOCAL PLANE MASK SO THAT DOT IS ON AXIS (PHASE SHIFT APPLIED!)') 
+
+    seconds_to_watch = float(input('input how many seconds do you need to watch the camera for to make manual adjustment to FPM?'))
+
+    watch_camera(camera, seconds_to_watch = seconds_to_watch, time_between_frames=0.05)
+    plt.close()
+
+    # RECORD FPM-IN IMAGE 
+    data_fpm_in = apply_sequence_to_DM_and_record_images(DM, camera, DM_command_sequence, number_images_recorded_per_cmd = 50, save_dm_cmds = True, calibration_dict=None, additional_header_labels=[('FPM_status','IN')],sleeptime_between_commands=0.01, save_fits = None)
+
+    # take median frame over each image set
+    fpm_in_fits = fits.PrimaryHDU( np.median( data_fpm_in[0].data[0] , axis = 0) )
+    fpm_out_fits = fits.PrimaryHDU( np.median( data_fpm_out[0].data[0] , axis = 0) )
+    # SET FPM EXTNAMES headers
+    fpm_in_fits.header.set('EXTNAME','FPM_IN')
+    fpm_out_fits.header.set('EXTNAME','FPM_OUT')
+    #camera headers
+    camera_info_dict = get_camera_info(camera)
+    for k,v in camera_info_dict.items():
+       fpm_in_fits.header.set(k,v)
+       fpm_out_fits.header.set(k,v)
+
+    # init and append calibration frames to main fits list
+    data = fits.HDUList([])
+    data.append( fpm_in_fits )
+    data.append( fpm_out_fits )
+    if save_fits!=None:
+        if type(save_fits)==str:
+            data.writeto(save_fits)
+        else:
+            raise TypeError('save_images needs to be either None or a string indicating where to save file')
+            
+        
+    return(data) 
+
+def image_signal_processing( image, reference_pupil_fits, reduction_dict=None, crop_indicies = None ): 
+    """
+    signal processing for building IM any control loop processing 
+    - image is the image to turn into control signal
+    - reference_pupil_fits is a fits file with images of the pupil with FPM in and out, it is the output of get_reference_pupils() function 
+    - reduction_dict is a dictionary with darks biases etc if we want to reduce signals before processing 
+    - crop_indicies is list of indicies to crop images. i.e crop_indicies=[x1,x2,y1,y2]. For no cropping crop_indicies=None, which is default
+    """
+    if reduction_dict==None:
+        if crop_indicies == None: # no cropping of images 
+            S = ( image - reference_pupil_fits['FPM_IN'].data ) /  reference_pupil_fits['FPM_OUT'].data
+        else : 
+            x1,x2,y1,y2 = crop_indicies
+            S = ( image[x1:x2,y1:y2] - reference_pupil_fits['FPM_IN'].data[x1:x2,y1:y2] ) /  reference_pupil_fits['FPM_OUT'].data[x1:x2,y1:y2]
+    else:
+        raise TypeError('to do: include reduction from deduction dictionary') 
+    
+    return(S) 
 
 
 """
