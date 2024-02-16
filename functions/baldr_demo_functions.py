@@ -179,6 +179,7 @@ def watch_camera(camera, seconds_to_watch = 10, time_between_frames=0.01) :
         plt.ion()
         plt.imshow(a)
         plt.pause( time_between_frames )
+        time.sleep( time_between_frames )
         plt.clf() 
         t1 = datetime.datetime.now() 
         seconds_passed = (t1 - t0).seconds
@@ -414,7 +415,7 @@ def create_phase_screen_cmd_for_DM(scrn, DM, flat_reference, scaling_factor=0.1,
         plt.colorbar(im1, ax=ax[1]) 
         plt.show() 
 
-    dm_cmd =  list( flat_reference + scrn_on_DM[np.isfinite(scrn_on_DM)] ) #drop non-finite values which should be nan values created from drop_indicies array
+    dm_cmd =  list( 0.5 + scrn_on_DM[np.isfinite(scrn_on_DM)] ) #drop non-finite values which should be nan values created from drop_indicies array
     return(dm_cmd) 
 
 
@@ -611,9 +612,10 @@ def get_reference_pupils(DM, camera, fps, flat_map, number_images_recorded_per_c
         
     return(data) 
 
-def image_signal_processing( image, reference_pupil_fits, reduction_dict=None, crop_indicies = None ): 
+def get_error_signal( image, reference_pupil_fits, reduction_dict=None, crop_indicies = None ): 
     """
-    signal processing for building IM any control loop processing 
+    signal processing for getting error vector from an input image from the ZWFS. 
+    This error vector can be fed back with PID gains  for closed loop operation   
     - image is the image to turn into control signal
     - reference_pupil_fits is a fits file with images of the pupil with FPM in and out, it is the output of get_reference_pupils() function 
     - reduction_dict is a dictionary with darks biases etc if we want to reduce signals before processing 
@@ -621,14 +623,14 @@ def image_signal_processing( image, reference_pupil_fits, reduction_dict=None, c
     """
     if reduction_dict==None:
         if crop_indicies == None: # no cropping of images 
-            S = ( image - reference_pupil_fits['FPM_IN'].data ) /  reference_pupil_fits['FPM_OUT'].data
+            Serr = ( image - reference_pupil_fits['FPM_IN'].data ) /  reference_pupil_fits['FPM_OUT'].data
         else : 
             x1,x2,y1,y2 = crop_indicies
-            S = ( image[x1:x2,y1:y2] - reference_pupil_fits['FPM_IN'].data[x1:x2,y1:y2] ) /  reference_pupil_fits['FPM_OUT'].data[x1:x2,y1:y2]
+            Serr = ( image[x1:x2,y1:y2] - reference_pupil_fits['FPM_IN'].data[x1:x2,y1:y2] ) /  reference_pupil_fits['FPM_OUT'].data[x1:x2,y1:y2]
     else:
         raise TypeError('to do: include reduction from deduction dictionary') 
     
-    return(S) 
+    return(Serr) 
 
 
 """
