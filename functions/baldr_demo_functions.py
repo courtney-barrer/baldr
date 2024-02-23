@@ -167,23 +167,35 @@ def get_camera_info(camera):
     
     return(camera_info_dict)
    
-def watch_camera(camera, seconds_to_watch = 10, time_between_frames=0.01) :
-    
+def watch_camera(camera, frames_to_watch = 10, time_between_frames=0.01) :
+  
+    print( f'{frames_to_watch} frames to watch with ~{time_between_frames}s wait between frames = ~{5*time_between_frames*frames_to_watch}s watch time' )
+
     t0= datetime.datetime.now() 
     plt.figure(figsize=(15,15))
-    plt.ion()
+    plt.ion() # turn on interactive mode 
     FliSdk_V2.Start(camera)     
     seconds_passed = 0
+
+    for i in range(int(frames_to_watch)): 
+        
+        a=FliSdk_V2.GetRawImageAsNumpyArray(camera,-1)
+        plt.imshow(a)
+        plt.pause( time_between_frames )
+        #time.sleep( time_between_frames )
+        plt.clf() 
+    """
     while seconds_passed < seconds_to_watch:
         a=FliSdk_V2.GetRawImageAsNumpyArray(camera,-1)
-        plt.ion()
         plt.imshow(a)
         plt.pause( time_between_frames )
         time.sleep( time_between_frames )
         plt.clf() 
         t1 = datetime.datetime.now() 
-        seconds_passed = (t1 - t0).seconds
+        seconds_passed = (t1 - t0).seconds"""
+
     FliSdk_V2.Stop(camera) 
+    plt.ioff()# turn off interactive mode 
     plt.close()
 
 def measure_bias():
@@ -440,25 +452,33 @@ def detect_pupil_and_PSF_region(camera, fps = 600 , plot_results = True, save_fi
     
     # detect circles, we can play with minDist, param1, param2 to optimize if re-alligned 
     #circles = cv2.HoughCircles(gray_scale_image, method=cv2.HOUGH_GRADIENT, dp=1,minDist=50,param1=5,param2=16,minRadius=0,maxRadius=0)
-    circles = cv2.HoughCircles(gray_scale_image, method=cv2.HOUGH_GRADIENT, dp=1,minDist=50,param1=11,param2=36,minRadius=10,maxRadius=100)[0]
+    try:
+        circles = cv2.HoughCircles(gray_scale_image, method=cv2.HOUGH_GRADIENT, dp=1,minDist=50,param1=11,param2=36,minRadius=10,maxRadius=100)[0]
     #detect circles in image
     #circles = np.uint16(np.around(circles)) #[[(x0,y0,r0),..,(xN,yN,rN)]]
-    
+    except:
+        print("no circles detected\n")
+        circles = []
+    if (len(circles) > 5) or (len(circles) == 0) :
+        print( '\n to many circles detected in image - detection failed\n')
+
     if plot_results:
         plt.figure(figsize=(8,5))
-        plt.imshow(np.log10( np.array(gray_scale_image,dtype=float) ) )
+        plt.imshow( np.array(gray_scale_image,dtype=float) )
         
-        pltcircle = []
-        for x,y,r in circles:
-            pltcircle.append( plt.Circle((x,y), r, facecolor='None', edgecolor='r', lw=1,label='detected region'))
-
-        for c in pltcircle:
-            plt.gca().add_patch(c)
-            plt.legend()
+        if (len(circles) < 5) or (len(circles) == 0) :
+            pltcircle = []
+            for x,y,r in circles:
+                pltcircle.append( plt.Circle((x,y), r, facecolor='None', edgecolor='r', lw=1,label='detected region'))
+            for c in pltcircle:
+                plt.gca().add_patch(c)
+                plt.legend()
         plt.show() 
-
-
-    set_regions_manually = float(input('if you are happy with detected regions input 0, otherwise input 1 to manually set masked regions.'))
+        #time.sleep(5)
+        #plt.close()
+    
+    
+    set_regions_manually = float(input('\nif you are happy with detected regions input 0, otherwise input 1 to manually set masked regions. \n\n---(try (x,y,r) = 225,215,35 for pupil, 400,250,15 for PSF)\n'))
 
             
     if set_regions_manually:
@@ -467,16 +487,18 @@ def detect_pupil_and_PSF_region(camera, fps = 600 , plot_results = True, save_fi
 
     if plot_results:
         plt.figure(figsize=(8,5))
-        plt.imshow(np.log10( np.array(gray_scale_image,dtype=float) ) )
+        plt.imshow( np.array(gray_scale_image,dtype=float) )
         
-        pltcircle = []
-        for x,y,r in circles:
-            pltcircle.append( plt.Circle((x,y), r, facecolor='None', edgecolor='r', lw=1,label='detected region'))
-
-        for c in pltcircle:
-            plt.gca().add_patch(c)
-            plt.legend()
-        plt.show()         
+        if len(circles) < 5:
+            pltcircle = []
+            for x,y,r in circles:
+                pltcircle.append( plt.Circle((x,y), r, facecolor='None', edgecolor='r', lw=1,label='detected region'))
+            for c in pltcircle:
+                plt.gca().add_patch(c)
+                plt.legend()
+        plt.show() 
+        #time.sleep(5)
+        #plt.close()
 
 
     if save_fits!=None:
@@ -559,7 +581,7 @@ def get_reference_pupils(DM, camera, fps, flat_map, number_images_recorded_per_c
 
     """
     # make our low order basis in command space 
-    basis = construct_command_basis(DM , basis='Zernike', number_of_modes = 3, actuators_across_diam = 'full',flat_map=None)
+    #basis = construct_command_basis(DM , basis='Zernike', number_of_modes = 3, actuators_across_diam = 'full',flat_map=None)
     
     #flat DM 
     DM.send_data( flat_map )  
@@ -569,20 +591,19 @@ def get_reference_pupils(DM, camera, fps, flat_map, number_images_recorded_per_c
 
     print('\n=======\n ADJUST FOCAL PLANE MASK SO THAT DOT IS OFF AXIS (NO PHASE SHIFT APPLIED!)') 
 
-    seconds_to_watch = float(input('input how many seconds do you need to watch the camera for to make manual adjustment to FPM?'))
+    frames_to_watch = float(input('input how many frames do you need to watch the camera for to make manual adjustment to FPM?'))
 
-    watch_camera(camera, seconds_to_watch = seconds_to_watch, time_between_frames=0.05)
-    plt.close()
+    watch_camera(camera, frames_to_watch = frames_to_watch, time_between_frames=0.05)
 
     # RECORD FPM-OUT IMAGE 
     data_fpm_out = apply_sequence_to_DM_and_record_images(DM, camera, DM_command_sequence, number_images_recorded_per_cmd = 50, save_dm_cmds = True, calibration_dict=None, additional_header_labels=[('FPM_status','OUT')],sleeptime_between_commands=0.01, save_fits = None)
 
     print('\n=======\n ADJUST FOCAL PLANE MASK SO THAT DOT IS ON AXIS (PHASE SHIFT APPLIED!)') 
 
-    seconds_to_watch = float(input('input how many seconds do you need to watch the camera for to make manual adjustment to FPM?'))
+    frames_to_watch = float(input('input how many frames do you need to watch the camera for to make manual adjustment to FPM?'))
 
-    watch_camera(camera, seconds_to_watch = seconds_to_watch, time_between_frames=0.05)
-    plt.close()
+    watch_camera(camera, frames_to_watch = frames_to_watch, time_between_frames=0.05)
+
 
     # RECORD FPM-IN IMAGE 
     data_fpm_in = apply_sequence_to_DM_and_record_images(DM, camera, DM_command_sequence, number_images_recorded_per_cmd = 50, save_dm_cmds = True, calibration_dict=None, additional_header_labels=[('FPM_status','IN')],sleeptime_between_commands=0.01, save_fits = None)
