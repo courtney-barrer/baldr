@@ -118,7 +118,7 @@ DM_command_sequence = [flat_dm_cmd] + list( np.array(_DM_command_sequence).resha
 additional_labels = [('in-poke max amp', np.max(ramp_values)),('out-poke max amp', np.min(ramp_values)),('#ramp steps',number_amp_samples), ('seq0','flatdm'), ('reshape',f'{number_amp_samples}-{modal_basis.shape[0]}-{modal_basis.shape[1]}')]
 
 # --- poke DM in and out and record data. Extension 0 corresponds to images, extension 1 corresponds to DM commands
-raw_IM_data = bdf.apply_sequence_to_DM_and_record_images(dm, camera, DM_command_sequence, number_images_recorded_per_cmd = number_images_recorded_per_cmd, save_dm_cmds = True, calibration_dict=None, additional_header_labels = additional_labels,sleeptime_between_commands=0.01, save_fits = None) #data_path + f'ramp_poke_DM_ampMax-{amp_max}_Nsamp-{number_amp_samples}_{tstamp}.fits' )
+raw_IM_data = bdf.apply_sequence_to_DM_and_record_images(dm, camera, DM_command_sequence, number_images_recorded_per_cmd = number_images_recorded_per_cmd, save_dm_cmds = True, calibration_dict=None, additional_header_labels = additional_labels,sleeptime_between_commands=0.01, save_fits = data_path + f'ramp_poke_DM_ampMax-{amp_max}_Nsamp-{number_amp_samples}_{tstamp}.fits' ) # None
 
 
 
@@ -130,7 +130,7 @@ agregated_pupils = [np.median(raw_IM_data[0].data[i],axis=0) for i in range(len(
 agregated_pupils_array = np.array( agregated_pupils[1:] ).reshape(number_amp_samples, modal_basis.shape[0],ref_pupils['FPM_IN'].data.shape[0], ref_pupils['FPM_IN'].data.shape[1])
 
 # for given poke amp look at SVD and plot detector eigenmodes!
-poke_amp_indx = number_amp_samples//2 + 1 # the smallest positive value 
+poke_amp_indx = number_amp_samples//2 + 2 # the smallest positive value 
 print( f'calculating IM for pokeamp = {ramp_values[poke_amp_indx]}' )
 
 # dont forget to crop just square pupil region
@@ -163,7 +163,7 @@ if verbose:
 
 # =====(7)
 # filter piston in inverse modes
-invSfilt =  [np.min(S)/100] + list( 1/S[1:] )
+invSfilt =  1/S[:] #[np.min(S)/100] + list( 1/S[1:] )
 CM = Vt.T @ (np.diag( invSfilt ) )  @ U.T
 
 # ==== (8) 
@@ -256,8 +256,7 @@ recon_fits.append( CMfits )
 #WRITE IT
 recon_fits.writeto( save_fits )
 
-
-#dm.Close() # close DM 
+dm.close_dm() # close DM 
 
 
 

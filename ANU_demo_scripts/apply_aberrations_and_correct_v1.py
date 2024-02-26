@@ -72,7 +72,7 @@ camera = bdf.set_fsp_dit( camera, fps=fps, tint=None) # set up initial frame rat
 
 
 # --- setup DM
-dm, dm_err_code = bdf.set_up_DM(DM_serial_number='17DW019#053')
+dm, dm_err_code =  bdf.set_up_DM(DM_serial_number='17DW019#053')
 
 # --- setup DM interaction and control matricies
 modal_basis = recon_data['BASIS'].data #
@@ -97,13 +97,14 @@ ci_x1,ci_x2,ci_y1,ci_y2 = recon_data[0].header['ci_x1'],recon_data[0].header['ci
 # create static phase screen on DM 
 
 scrn_scaling_factor = 0.1
-number_images_recorded_per_cmd = 10 #NDITs to take median over 
+number_images_recorded_per_cmd = 20 #NDITs to take median over 
 PID = [1, 0, 0] # proportional, integator, differential gains  
 Nint = 1 # used for integral term.. should be calcualted later. TO DO 
 dt_baldr = 1  # used for integral term.. should be calcualted later. TO DO  
 
 save_fits = data_path + f'closed_loop_on_static_aberration_disturb-kolmogorov_amp-{scrn_scaling_factor}_PID-{PID}_t-{tstamp}.fits'
 
+"""
 # --- create infinite phasescreen from aotools module 
 Nx_act = dm.num_actuators_width()
 scrn = aotools.infinitephasescreen.PhaseScreenVonKarman(nx_size=Nx_act*2**5, pixel_scale=1.8/(Nx_act*2**5),r0=0.1,L0=12)
@@ -115,6 +116,13 @@ disturbance_cmd = bdf.create_phase_screen_cmd_for_DM(scrn=scrn, DM=dm, flat_refe
 # for visualization get the 2D grid of the disturbance on DM  
 #plt.imshow( bdf.get_DM_command_in_2D(disturbance_cmd, Nx_act=12) ); plt.show()
 #plt.close() 
+"""
+
+disturbance_cmd = np.zeros( len( flat_dm_cmd ))  
+disturbance_cmd[np.array([5,16,28,40,52,64])]=0.06
+disturbance_cmd += flat_dm_cmd.copy()
+
+plt.imshow( bdf.get_DM_command_in_2D(disturbance_cmd, Nx_act=12) ); plt.show()
 
 print(' \n\n applying static aberration and closing loop')
 # apply DISTURBANCE 
@@ -130,12 +138,16 @@ disturbfits = fits.PrimaryHDU( disturbance_cmd )
 disturbfits.header.set('EXTNAME','DISTURBANCE')
 disturbfits.header.set('WHAT_IS','disturbance in cmd space')
 
+IMfits =  fits.PrimaryHDU( IM )
+IMfits.header.set('EXTNAME','IM')
+IMfits.header.set('WHAT IS','IM_filtered') 
+
 CMfits =  fits.PrimaryHDU( CM )
 CMfits.header.set('EXTNAME','CM')
 CMfits.header.set('WHAT IS','CM_filtered') 
 
 # init lists to hold data from control loop
-IMG_list = []
+IMG_list = [ ]
 RES_list = [ ] #list( np.nan * np.zeros( int( (cp_x2 - cp_x1) * (cp_y2 - cp_y1) ) ) ) ]
 RECO_list = [ ] #list( np.nan * flat_dm_cmd ) ]
 CMD_list = [ list( flat_dm_cmd ) ] 
@@ -163,7 +175,8 @@ PID[0] = 0.45 * Ku #1 #0.45 * Ku # 1.1 #1. #2.
 #        modal_gains = -1. * S_filt  / np.max(S_filt) 
 
 
-FliSdk_V2.Start(camera)        
+FliSdk_V2.Start(camera)    
+    
 for i in range(10):
 
     # get new image and store it (save pupil and psf differently)
@@ -233,6 +246,12 @@ IMG_fits.header.set('recon_fname',recon_file.split('/')[-1])
 for k,v in camera_info_dict.items(): 
     IMG_fits.header.set(k,v)   # add in some fits headers about the camera 
 
+for i,n in zip([ci_x1,ci_x2,ci_y1,ci_y2],['ci_x1','ci_x2','ci_y1','ci_y2']):
+    IMG_fits.header.set(n,i)
+
+for i,n in zip([cp_x1,cp_x2,cp_y1,cp_y2],['cp_x1','cp_x2','cp_y1','cp_y2']):
+    IMG_fits.header.set(n,i)
+
 CMD_fits = fits.PrimaryHDU( CMD_list )
 CMD_fits.header.set('EXTNAME','CMDS')
 CMD_fits.header.set('WHAT_IS','DM commands')
@@ -254,7 +273,7 @@ RMS_fits.header.set('EXTNAME','RMS')
 RMS_fits.header.set('WHAT_IS','std( cmd - aber_in_cmd_space )')
 
 # add these all as fits extensions 
-for f in [disturbfits, IMG_fits, RES_fits, RECO_fits, ERR_fits, CMD_fits, RMS_fits ]: #[Ufits, Sfits, Vtfits, CMfits, disturbfits, IMG_fits, ERR_fits, RECO_fits, CMD_fits, RMS_fits ]:
+for f in [disturbfits, IMfits, CMfits, IMG_fits, RES_fits, RECO_fits, ERR_fits, CMD_fits, RMS_fits ]: #[Ufits, Sfits, Vtfits, CMfits, disturbfits, IMG_fits, ERR_fits, RECO_fits, CMD_fits, RMS_fits ]:
     static_ab_performance_fits.append( f ) 
 
 #save data! 

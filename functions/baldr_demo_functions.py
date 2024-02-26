@@ -478,7 +478,7 @@ def detect_pupil_and_PSF_region(camera, fps = 600 , plot_results = True, save_fi
         #plt.close()
     
     
-    set_regions_manually = float(input('\nif you are happy with detected regions input 0, otherwise input 1 to manually set masked regions. \n\n---(try (x,y,r) = 225,215,35 for pupil, 400,250,15 for PSF)\n'))
+    set_regions_manually = float(input('\nif you are happy with detected regions input 0, otherwise input 1 to manually set masked regions. \n\n---(try (x,y,r) = 155,216,50 for pupil, 301,247,20 for PSF)\n'))
 
             
     if set_regions_manually:
@@ -644,10 +644,10 @@ def get_error_signal( image, reference_pupil_fits, reduction_dict=None, crop_ind
     """
     if reduction_dict==None:
         if crop_indicies == None: # no cropping of images 
-            Serr = ( image - reference_pupil_fits['FPM_IN'].data ) /  reference_pupil_fits['FPM_OUT'].data
+            Serr = ( image - reference_pupil_fits['FPM_IN'].data ) /  np.mean( reference_pupil_fits['FPM_OUT'].data )
         else : 
             x1,x2,y1,y2 = crop_indicies
-            Serr = ( image[x1:x2,y1:y2] - reference_pupil_fits['FPM_IN'].data[x1:x2,y1:y2] ) /  reference_pupil_fits['FPM_OUT'].data[x1:x2,y1:y2]
+            Serr = ( image[x1:x2,y1:y2] - reference_pupil_fits['FPM_IN'].data[x1:x2,y1:y2] ) /  np.mean( reference_pupil_fits['FPM_OUT'].data[x1:x2,y1:y2] )
     else:
         raise TypeError('to do: include reduction from deduction dictionary') 
     
