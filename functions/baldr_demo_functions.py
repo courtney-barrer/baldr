@@ -427,7 +427,7 @@ def create_phase_screen_cmd_for_DM(scrn, DM, flat_reference, scaling_factor=0.1,
         plt.colorbar(im1, ax=ax[1]) 
         plt.show() 
 
-    dm_cmd =  list( 0.5 + scrn_on_DM[np.isfinite(scrn_on_DM)] ) #drop non-finite values which should be nan values created from drop_indicies array
+    dm_cmd =  list( scrn_on_DM[np.isfinite(scrn_on_DM)] ) #drop non-finite values which should be nan values created from drop_indicies array
     return(dm_cmd) 
 
 

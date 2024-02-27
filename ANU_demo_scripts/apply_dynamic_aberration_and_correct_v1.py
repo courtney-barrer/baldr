@@ -47,6 +47,7 @@ interp_deflection_4x4act = interpolate.interp1d( deflection_data['cmd'],deflecti
 
 # --- read in recon file 
 available_recon_pupil_files = glob.glob( data_path+'BDR_RECON_*.fits' )
+available_recon_pupil_files.sort(key=os.path.getctime) # sort by most recent 
 print('\n======\navailable AO reconstruction fits files:\n')
 for f in available_recon_pupil_files:
     print( f ,'\n') 
@@ -79,13 +80,20 @@ modal_basis = recon_data['BASIS'].data #
 # check modal basis dimensions are correct
 if modal_basis.shape[1] != 140:
     raise TypeError( 'modal_basis.shape[1] != 140 => not right shape. Maybe we should transpose it?\nmodal_basis[i] should have a 140 length command for the DM corresponding to mode i')
+
+# poke amplitude in DM command space used to generate IM 
+IM_pokeamp = float( recon_data['IM'].header['poke_amp_cmd'] )
+# pupil cropping coordinates
+cp_x1,cp_x2,cp_y1,cp_y2 = recon_data[0].header['cp_x1'],recon_data[0].header['cp_x2'],recon_data[0].header['cp_y1'],recon_data[0].header['cp_y2']
+# PSF cropping coordinates 
+ci_x1,ci_x2,ci_y1,ci_y2 = recon_data[0].header['ci_x1'],recon_data[0].header['ci_x2'],recon_data[0].header['ci_y1'],recon_data[0].header['ci_y2']
  
 IM = recon_data['IM'].data # unfiltered
 
 U,S,Vt = np.linalg.svd( IM ,full_matrices=True)
 
-plt.figure(figsize=(8,5))
-plt.semilogy( S )
+plt.figure()
+plt.plot( S )
 plt.axvline( len(S) * np.pi*2**2/(4.4)**2 ,linestyle=':',color='k',label=r'$D_{DM}^2/\pi r_{pup}^2$')
 plt.ylabel('singular values',fontsize=15)
 plt.xlabel('eigenvector index',fontsize=15)
@@ -95,19 +103,13 @@ plt.gca().tick_params( labelsize=15 )
 
 Sfilt = S > 0.6
 Sigma = np.zeros( np.array(IM).shape, float)
-np.fill_diagonal(Sigma, 2000 * S[Sfilt], wrap=False) #
-
+np.fill_diagonal(Sigma, 50 * S[Sfilt], wrap=False) #
+#np.fill_diagonal(Sigma, 10 * S[:int(len(S) * np.pi*2**2/(4.4)**2)], wrap=False) 
 CM = np.linalg.pinv( U @ Sigma @ Vt ) # C = A @ M 
 
 #CM = recon_data['CM'].data # filtered
 
 
-# poke amplitude in DM command space used to generate IM 
-IM_pokeamp = float( recon_data['IM'].header['poke_amp_cmd'] )
-# pupil cropping coordinates
-cp_x1,cp_x2,cp_y1,cp_y2 = recon_data[0].header['cp_x1'],recon_data[0].header['cp_x2'],recon_data[0].header['cp_y1'],recon_data[0].header['cp_y2']
-# PSF cropping coordinates 
-ci_x1,ci_x2,ci_y1,ci_y2 = recon_data[0].header['ci_x1'],recon_data[0].header['ci_x2'],recon_data[0].header['ci_y1'],recon_data[0].header['ci_y2']
 
 # have a look at one of the interaction images for a particular modal actuation
 # plt.imshow( IM[100].reshape(cp_x2-cp_x1,cp_y2-cp_y1) );plt.show()
@@ -115,37 +117,42 @@ ci_x1,ci_x2,ci_y1,ci_y2 = recon_data[0].header['ci_x1'],recon_data[0].header['ci
 # =====(3)
 # create static phase screen on DM 
 
-scrn_scaling_factor = 0.1
+scrn_scaling_factor = 0.15
 number_images_recorded_per_cmd = 20 #NDITs to take median over 
-PID = [1, 0, 0] # proportional, integator, differential gains  
+PID = [1.0, 0.0, 0.0] # proportional, integator, differential gains  
 Nint = 1 # used for integral term.. should be calcualted later. TO DO 
 dt_baldr = 1  # used for integral term.. should be calcualted later. TO DO  
 
-save_fits = data_path + f'closed_loop_on_static_aberration_disturb-kolmogorov_amp-{scrn_scaling_factor}_PID-{PID}_t-{tstamp}.fits'
+save_fits = data_path + f'closed_loop_on_dynanic_aberration_disturb-kolmogorov_amp-{scrn_scaling_factor}_PID-{PID}_t-{tstamp}.fits'
 
-"""
+
 # --- create infinite phasescreen from aotools module 
 Nx_act = dm.num_actuators_width()
-scrn = aotools.infinitephasescreen.PhaseScreenVonKarman(nx_size=Nx_act*2**5, pixel_scale=1.8/(Nx_act*2**5),r0=0.1,L0=12)
+screen_pixels = Nx_act*2**5 # some multiple of numer of actuators across DM 
+D = 1.8 #m effective diameter of the telescope
+scrn = aotools.infinitephasescreen.PhaseScreenVonKarman(nx_size=screen_pixels, pixel_scale=D/screen_pixels,r0=0.1,L0=12)
 
 corner_indicies = [0, Nx_act-1, Nx_act * (Nx_act-1), -1] # Beware -1 index doesn't work if inserting in list! This is  ok for for use with create_phase_screen_cmd_for_DM function.
 
 disturbance_cmd = bdf.create_phase_screen_cmd_for_DM(scrn=scrn, DM=dm, flat_reference=flat_dm_cmd, scaling_factor = scrn_scaling_factor, drop_indicies = corner_indicies, plot_cmd=False)  # normalized flat_dm +- scaling_factor?
 
+rows_to_jump = 2 # how many rows to jump on initial phase screen for each Baldr loop
+
+distance_per_correction = rows_to_jump * D/screen_pixels # effective distance travelled by turbulence per AO iteration 
+print(f'{rows_to_jump} rows jumped per AO command in initial phase screen of {screen_pixels} pixels. for {D}m mirror this corresponds to a distance_per_correction = {distance_per_correction}m')
+
 # for visualization get the 2D grid of the disturbance on DM  
-#plt.imshow( bdf.get_DM_command_in_2D(disturbance_cmd, Nx_act=12) ); plt.show()
+plt.figure()
+plt.imshow( bdf.get_DM_command_in_2D(disturbance_cmd, Nx_act=12) )
+plt.colorbar()
+plt.title( 'initial Kolmogorov aberration to apply to DM')
+plt.show()
 #plt.close() 
-"""
 
-disturbance_cmd = np.zeros( len( flat_dm_cmd ))  
-disturbance_cmd[np.array([5,16,28,40,52,64])]=0.06
-disturbance_cmd += flat_dm_cmd.copy()
-
-plt.imshow( bdf.get_DM_command_in_2D(disturbance_cmd, Nx_act=12) ); plt.show()
 
 print(' \n\n applying static aberration and closing loop')
-# apply DISTURBANCE 
-dm.send_data( disturbance_cmd )
+
+
 
 # =====(6)
 # NOW try to correct it! 
@@ -153,9 +160,6 @@ dm.send_data( disturbance_cmd )
 # init main fits file for saving telemetry
 static_ab_performance_fits = fits.HDUList([])
 
-disturbfits = fits.PrimaryHDU( disturbance_cmd )
-disturbfits.header.set('EXTNAME','DISTURBANCE')
-disturbfits.header.set('WHAT_IS','disturbance in cmd space')
 
 IMfits =  fits.PrimaryHDU( IM )
 IMfits.header.set('EXTNAME','IM')
@@ -166,16 +170,18 @@ CMfits.header.set('EXTNAME','CM')
 CMfits.header.set('WHAT IS','CM_filtered') 
 
 # init lists to hold data from control loop
+DISTURB_list = [ np.zeros( len( flat_dm_cmd ) )  ] # begin with no disturbance (add it after first iteration)
 IMG_list = [ ]
 RES_list = [ ] #list( np.nan * np.zeros( int( (cp_x2 - cp_x1) * (cp_y2 - cp_y1) ) ) ) ]
 RECO_list = [ ] #list( np.nan * flat_dm_cmd ) ]
 CMD_list = [ list( flat_dm_cmd ) ] 
 ERR_list = [ ]# list( np.nan * np.zeros( int( (cp_x2 - cp_x1) * (cp_y2 - cp_y1) ) ) ) ]  # length depends on cropped pupil when flattened 
-RMS_list = [] # to hold std( cmd - aber ) for each iteration
-  
-
+RMS_list = [ ] # to hold std( cmd - aber ) for each iteration
+ 
 modal_gains = IM_pokeamp * np.ones(len(modal_basis[0]))
 
+# start with flat DM
+dm.send_data( flat_dm_cmd )
 
 """
 setting PI parameters https://www.zhinst.com/ch/en/resources/principles-of-pid-controllers?gclid=CjwKCAiApaarBhB7EiwAYiMwqi06BUUcq6C11e3tHueyTd7x1DqVrk9gi8xLmtLwUBRCT4nW7EsJnxoCz4oQAvD_BwE&hsa_acc=8252128723&hsa_ad=665555823596&hsa_cam=14165786829&hsa_grp=126330066395&hsa_kw=pid%20controller&hsa_mt=p&hsa_net=adwords&hsa_src=g&hsa_tgt=kwd-354990109332&hsa_ver=3&utm_campaign=PID%20Group&utm_medium=ppc&utm_source=adwords&utm_term=pid%20controller
@@ -197,9 +203,41 @@ PID[0] = 0.45 * Ku #1 #0.45 * Ku # 1.1 #1. #2.
 
 
 FliSdk_V2.Start(camera)    
-    
-for i in range(10):
+time.sleep(1)
 
+Nits = 100
+keep_loop_open_for = 30 
+#===========================
+#OPEN LOOP (dont feedback a command to the DM besides the disturbance command)
+for i in range(keep_loop_open_for): 
+
+    IMG_list.append( list( np.median( [FliSdk_V2.GetRawImageAsNumpyArray(camera,-1)  for i in range(number_images_recorded_per_cmd)] , axis=0) ) ) 
+
+    err_2d = bdf.get_error_signal( np.array(IMG_list[-1]), reference_pupil_fits = recon_data, reduction_dict=None, crop_indicies = [cp_x1,cp_x2,cp_y1,cp_y2] )
+
+    RES_list.append( err_2d.reshape(-1) ) 
+
+    RECO_list.append( list( CM.T @ RES_list[-1] ) )
+
+    ERR_list.append( list( np.sum( np.array([ g * a * B for g,a,B in  zip(modal_gains, RECO_list[-1], modal_basis)]) , axis=0) ) )
+
+    CMD_list.append( list(flat_dm_cmd) )
+
+    # propagate our phase screen a few rows  
+    for skip in range(rows_to_jump):
+        scrn.add_row() 
+    # get our new Kolmogorov disturbance command (normalized between [-scrn_scaling_factor,scrn_scaling_factor]
+    disturbance_cmd = bdf.create_phase_screen_cmd_for_DM(scrn=scrn, DM=dm, flat_reference=flat_dm_cmd, scaling_factor = scrn_scaling_factor, drop_indicies = corner_indicies, plot_cmd=False)
+
+    DISTURB_list.append( disturbance_cmd )
+    # apply our flat DM + disturbance for open loop 
+    dm.send_data(  CMD_list[-1] + DISTURB_list[-1] ) 
+    # record RMS in command space 
+    RMS_list.append( np.std( np.array(CMD_list[-1]) - np.array(DISTURB_list[-1]) ) )
+
+#===========================
+#CLOSED LOOP (feedback ZWFS control command)
+for i in range(Nits - keep_loop_open_for):  
     # get new image and store it (save pupil and psf differently)
     IMG_list.append( list( np.median( [FliSdk_V2.GetRawImageAsNumpyArray(camera,-1)  for i in range(number_images_recorded_per_cmd)] , axis=0) ) ) 
 
@@ -226,9 +264,9 @@ for i in range(10):
 
     # PID control 
     if len( ERR_list ) < Nint:
-        cmd = PID[0] * ERR_list[-1] +  PID[1] * np.sum( ERR_list ) * dt_baldr 
+        cmd = PID[0] * np.array(ERR_list[-1]) +  PID[1] * np.sum( ERR_list ) * dt_baldr 
     else:
-        cmd = PID[0] * ERR_list[-1] +  PID[1] * np.sum( ERR_list[-Nint:] , axis = 0 ) * dt_baldr 
+        cmd = PID[0] * np.array(ERR_list[-1]) +  PID[1] * np.sum( ERR_list[-Nint:] , axis = 0 ) * dt_baldr 
             
     cmdtmp =  cmd - np.mean(cmd) # REMOVE PISTON FORCEFULLY 
     """
@@ -239,18 +277,30 @@ for i in range(10):
     ax[1].set_title( 'cmd vector') 
     """
 
-    # check dm commands are within limits 
-    if np.max(cmdtmp)>1:
-        print(f'WARNING {sum(cmdtmp>1)} DM commands exceed max value of 1') 
-        cmdtmp[cmdtmp>1] = 1 #force clip
-    if np.min(cmdtmp)<0:
-        print(f'WARNING {sum(cmdtmp<0)} DM commands exceed min value of 0') 
-        cmdtmp[cmdtmp<0] = 0 # force clip
+    # check dm commands are within limits  # THIS IS WRONG SINCE cmdtmp is an error signal not absolute! c
+    #if np.max(cmdtmp)>1:
+    #    print(f'WARNING {sum(cmdtmp>1)} DM commands exceed max value of 1') 
+    #    cmdtmp[cmdtmp>1] = 1 #force clip
+    #if np.min(cmdtmp)<0:
+    #    print(f'WARNING {sum(cmdtmp<0)} DM commands exceed min value of 0') 
+    #    cmdtmp[cmdtmp<0] = 0 # force clip
     # finally append it:
     CMD_list.append( CMD_list[-1] - cmdtmp )
-    RMS_list.append( np.std( np.array(CMD_list[-1]) - np.array(disturbance_cmd) ) )
+    
+
+    # propagate our phase screen a few rows  
+    for skip in range(rows_to_jump):
+        scrn.add_row() 
+    # get our new Kolmogorov disturbance command 
+    disturbance_cmd = bdf.create_phase_screen_cmd_for_DM(scrn=scrn, DM=dm, flat_reference=flat_dm_cmd, scaling_factor = scrn_scaling_factor, drop_indicies = corner_indicies, plot_cmd=False)
+
+    DISTURB_list.append( disturbance_cmd )
     # apply control command to DM + our static disturbance 
-    dm.send_data( CMD_list[-1] + disturbance_cmd ) 
+    dm.send_data( CMD_list[-1] + DISTURB_list[-1] ) 
+    # record RMS in command space 
+    RMS_list.append( np.std( np.array(CMD_list[-1]) - np.array(DISTURB_list[-1]) ) )
+    # rest a bit
+    time.sleep(0.05)
 
 # now flatten once finished
 dm.send_data( flat_dm_cmd ) 
@@ -260,10 +310,18 @@ camera_info_dict = bdf.get_camera_info( camera )
 FliSdk_V2.Stop(camera)
 
 
+disturbfits = fits.PrimaryHDU( DISTURB_list )
+disturbfits.header.set('EXTNAME','DISTURBANCE')
+disturbfits.header.set('WHAT_IS','disturbance in cmd space')
+
 
 IMG_fits = fits.PrimaryHDU( IMG_list )
 IMG_fits.header.set('EXTNAME','IMAGES')
 IMG_fits.header.set('recon_fname',recon_file.split('/')[-1])
+
+IMG_fits.header.set('open_loop_iter', keep_loop_open_for)
+IMG_fits.header.set('close_loop_iter', Nits - keep_loop_open_for)
+
 for k,v in camera_info_dict.items(): 
     IMG_fits.header.set(k,v)   # add in some fits headers about the camera 
 
@@ -318,10 +376,10 @@ ax[0,1].set_ylabel('max(I) / max(I_ref)')
 ax[0,1].set_xlabel('iteration')
 
 
-ax[1,0].imshow( recon_data['FPM_OUT'].data[cp_x1:cp_x2,cp_y1:cp_y2] )
-ax[1,0].set_title('reference pupil')
+ax[1,0].imshow( recon_data['FPM_IN'].data[cp_x1:cp_x2,cp_y1:cp_y2] )
+ax[1,0].set_title('reference pupil (FPM IN)')
 
-ax[2,0].imshow( static_ab_performance_fits['IMAGES'].data[0][cp_x1:cp_x2,cp_y1:cp_y2]  )
+ax[2,0].imshow( static_ab_performance_fits['IMAGES'].data[1][cp_x1:cp_x2,cp_y1:cp_y2]  )
 ax[2,0].set_title('initial pupil with disturbance')
 
 ax[3,0].imshow( static_ab_performance_fits['IMAGES'].data[-1][cp_x1:cp_x2,cp_y1:cp_y2]  ) 

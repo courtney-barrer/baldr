@@ -79,13 +79,21 @@ modal_basis = recon_data['BASIS'].data #
 # check modal basis dimensions are correct
 if modal_basis.shape[1] != 140:
     raise TypeError( 'modal_basis.shape[1] != 140 => not right shape. Maybe we should transpose it?\nmodal_basis[i] should have a 140 length command for the DM corresponding to mode i')
+
+# poke amplitude in DM command space used to generate IM 
+IM_pokeamp = float( recon_data['IM'].header['poke_amp_cmd'] )
+# pupil cropping coordinates
+cp_x1,cp_x2,cp_y1,cp_y2 = recon_data[0].header['cp_x1'],recon_data[0].header['cp_x2'],recon_data[0].header['cp_y1'],recon_data[0].header['cp_y2']
+# PSF cropping coordinates 
+ci_x1,ci_x2,ci_y1,ci_y2 = recon_data[0].header['ci_x1'],recon_data[0].header['ci_x2'],recon_data[0].header['ci_y1'],recon_data[0].header['ci_y2']
+
  
 IM = recon_data['IM'].data # unfiltered
 
 U,S,Vt = np.linalg.svd( IM ,full_matrices=True)
 
-plt.figure(figsize=(8,5))
-plt.semilogy( S )
+plt.figure()
+plt.plot( S )
 plt.axvline( len(S) * np.pi*2**2/(4.4)**2 ,linestyle=':',color='k',label=r'$D_{DM}^2/\pi r_{pup}^2$')
 plt.ylabel('singular values',fontsize=15)
 plt.xlabel('eigenvector index',fontsize=15)
@@ -102,12 +110,6 @@ CM = np.linalg.pinv( U @ Sigma @ Vt ) # C = A @ M
 #CM = recon_data['CM'].data # filtered
 
 
-# poke amplitude in DM command space used to generate IM 
-IM_pokeamp = float( recon_data['IM'].header['poke_amp_cmd'] )
-# pupil cropping coordinates
-cp_x1,cp_x2,cp_y1,cp_y2 = recon_data[0].header['cp_x1'],recon_data[0].header['cp_x2'],recon_data[0].header['cp_y1'],recon_data[0].header['cp_y2']
-# PSF cropping coordinates 
-ci_x1,ci_x2,ci_y1,ci_y2 = recon_data[0].header['ci_x1'],recon_data[0].header['ci_x2'],recon_data[0].header['ci_y1'],recon_data[0].header['ci_y2']
 
 # have a look at one of the interaction images for a particular modal actuation
 # plt.imshow( IM[100].reshape(cp_x2-cp_x1,cp_y2-cp_y1) );plt.show()
@@ -141,6 +143,8 @@ disturbance_cmd = np.zeros( len( flat_dm_cmd ))
 disturbance_cmd[np.array([5,16,28,40,52,64])]=0.06
 disturbance_cmd += flat_dm_cmd.copy()
 
+plt.figure()
+plt.title( 'static aberration to apply to DM')
 plt.imshow( bdf.get_DM_command_in_2D(disturbance_cmd, Nx_act=12) ); plt.show()
 
 print(' \n\n applying static aberration and closing loop')
@@ -197,7 +201,7 @@ PID[0] = 0.45 * Ku #1 #0.45 * Ku # 1.1 #1. #2.
 
 
 FliSdk_V2.Start(camera)    
-    
+time.sleep(1)
 for i in range(10):
 
     # get new image and store it (save pupil and psf differently)
@@ -318,8 +322,8 @@ ax[0,1].set_ylabel('max(I) / max(I_ref)')
 ax[0,1].set_xlabel('iteration')
 
 
-ax[1,0].imshow( recon_data['FPM_OUT'].data[cp_x1:cp_x2,cp_y1:cp_y2] )
-ax[1,0].set_title('reference pupil')
+ax[1,0].imshow( recon_data['FPM_IN'].data[cp_x1:cp_x2,cp_y1:cp_y2] )
+ax[1,0].set_title('reference pupil (FPM IN)')
 
 ax[2,0].imshow( static_ab_performance_fits['IMAGES'].data[0][cp_x1:cp_x2,cp_y1:cp_y2]  )
 ax[2,0].set_title('initial pupil with disturbance')

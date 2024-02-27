@@ -51,6 +51,8 @@ fps = float(input("how many frames per second on camera (try between 1-600)"))
 camera = bdf.setup_camera(cameraIndex=0) #connect camera and init camera object
 camera = bdf.set_fsp_dit( camera, fps=fps, tint=None) # set up initial frame rate, tint=None means min integration time for given FPS
 
+# SHOULD SET UP CAMERA CROPPING HERE TOO
+
 # --- setup DM
 dm, dm_err_code = bdf.set_up_DM(DM_serial_number='17DW019#053')
 
@@ -130,11 +132,14 @@ agregated_pupils = [np.median(raw_IM_data[0].data[i],axis=0) for i in range(len(
 agregated_pupils_array = np.array( agregated_pupils[1:] ).reshape(number_amp_samples, modal_basis.shape[0],ref_pupils['FPM_IN'].data.shape[0], ref_pupils['FPM_IN'].data.shape[1])
 
 # for given poke amp look at SVD and plot detector eigenmodes!
+
+# ================================== This is what determines the poke amplitude for IM matrix
 poke_amp_indx = number_amp_samples//2 + 2 # the smallest positive value 
-print( f'calculating IM for pokeamp = {ramp_values[poke_amp_indx]}' )
+# ==================================
+print( f'======\ncalculating IM for pokeamp = {ramp_values[poke_amp_indx]}\n=====:::' )
 
 # dont forget to crop just square pupil region
-IM_unfiltered_unflat = [bdf.get_error_signal( agregated_pupils_array[poke_amp_indx][m], reference_pupil_fits=ref_pupils, reduction_dict=None,crop_indicies = [cp_x1,cp_x2,cp_y1,cp_y2]) for m in range(modal_basis.shape[0])] # [mode, x, y]
+IM_unfiltered_unflat = [bdf.get_error_signal( agregated_pupils_array[poke_amp_indx][m], reference_pupil_fits=ref_pupils, reduction_dict=None, crop_indicies = [cp_x1,cp_x2,cp_y1,cp_y2]) for m in range(modal_basis.shape[0])] # [mode, x, y]
 
 IM_unfiltered = [list(im.reshape(-1)) for im in IM_unfiltered_unflat]
 
