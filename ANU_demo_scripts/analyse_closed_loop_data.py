@@ -18,7 +18,6 @@ fig_path = root_path + '/figures/'
 os.chdir(root_path)
 from functions import baldr_demo_functions as bdf
 
-
 filenames_list = glob.glob(data_path + 'closed_loop_on_*.fits')
 filename = max(filenames_list, key=os.path.getctime)
 
@@ -77,7 +76,7 @@ if open_loop_iterations - iii < 0:
 plt.figure()
 plt.imshow( np.rot90( bdf.get_DM_command_in_2D(data['DISTURBANCE'].data[0]).T,2) )
 #plt.savefig(fig_path + f'static_aberration_{tstamp}.png') 
-plt.savefig(fig_path + f'dynamic_aberration_{tstamp}.png') 
+##plt.savefig(fig_path + f'dynamic_aberration_{tstamp}.png') 
 plt.show()
 fig,ax = plt.subplots( iii+jjj,3,figsize=(5,iii+jjj) )
 plt.subplots_adjust(hspace=0.5,wspace=0.5)
@@ -91,7 +90,7 @@ for i, (im, err, cmd) in enumerate( zip(data['IMAGES'].data[open_loop_iterations
     ax[i,0].set_title(f'image {i}')
     ax[i,1].set_title(f'err {i}') 
     ax[i,2].set_title(f'cmd {i}') 
-plt.savefig(fig_path + f'closed_loop_iterations_{tstamp}.png') 
+#plt.savefig(fig_path + f'closed_loop_iterations_{tstamp}.png') 
 plt.show()
 
 

@@ -29,8 +29,8 @@ data = fits.open( filename )
 
 # plot the images 
 plt.figure()
-plt.imshow( np.rot90( bdf.get_DM_command_in_2D(data['DISTURBANCE'].data[0]).T,2) )
-plt.savefig(fig_path + f'static_aberration_{tstamp}.png') 
+plt.imshow( np.rot90( bdf.get_DM_command_in_2D(data['DISTURBANCE'].data).T,2) )
+#plt.savefig(fig_path + f'static_aberration_{tstamp}.png') 
 #plt.savefig(fig_path + f'dynamic_aberration_{tstamp}.png') 
 plt.show()
 fig,ax = plt.subplots( data['IMAGES'].data.shape[0],3,figsize=(5,1.5*data['IMAGES'].data.shape[0]) )

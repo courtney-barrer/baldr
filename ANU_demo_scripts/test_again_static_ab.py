@@ -19,23 +19,12 @@ os.chdir(root_path)
 from functions import baldr_demo_functions as bdf
 
 
-"""
--- setup 
-1. setup files & parameters
-2. init camera and DM 
-3. Put static phase screen on DM 
-4. Try correct it and record data  
--- 
+from scipy.ndimage import gaussian_filter
 
--- to do
-- seperate aqcuisition template, output is reference pupil and control model fits files 
-- these can then be read in 
-
-"""
 
 # --- timestamp
 tstamp = datetime.datetime.now().strftime("%d-%m-%YT%H.%M.%S")
-# --- 
+
 
 # =====(1) 
 # --- DM command to make flat DM (calibrated file provided by BMC with the DM) 
@@ -45,7 +34,6 @@ deflection_data = pd.read_csv(root_path + "/DM_17DW019#053_deflection_data.csv",
 interp_deflection_1act = interpolate.interp1d( deflection_data['cmd'],deflection_data['1x1_act_deflection[nm]'] ) #cmd to nm deflection on DM from single actuator (from datasheet) 
 interp_deflection_4x4act = interpolate.interp1d( deflection_data['cmd'],deflection_data['4x4_act_deflection[nm]'] ) #cmd to nm deflection on DM from 4x4 actuator (from datasheet) 
 
-# --- read in recon file 
 available_recon_pupil_files = glob.glob( data_path+'BDR_RECON_*.fits' )
 print('\n======\navailable AO reconstruction fits files:\n')
 for f in available_recon_pupil_files:
@@ -64,24 +52,9 @@ else:
     recon_data = fits.open( recon_file ) 
     os.chdir(root_path)
 
-# =====(2) 
-# --- setup camera
-fps = float( recon_data[1].header['camera_fps'] )
-camera = bdf.setup_camera(cameraIndex=0) #connect camera and init camera object
-camera = bdf.set_fsp_dit( camera, fps=fps, tint=None) # set up initial frame rate, tint=None means max integration time for given FPS
 
-
-# --- setup DM
-dm, dm_err_code =  bdf.set_up_DM(DM_serial_number='17DW019#053')
-
-# --- setup DM interaction and control matricies
-modal_basis = recon_data['BASIS'].data #
-# check modal basis dimensions are correct
-if modal_basis.shape[1] != 140:
-    raise TypeError( 'modal_basis.shape[1] != 140 => not right shape. Maybe we should transpose it?\nmodal_basis[i] should have a 140 length command for the DM corresponding to mode i')
-
-# poke amplitude in DM command space used to generate IM 
-IM_pokeamp = float( recon_data['IM'].header['poke_amp_cmd'] )
+#recon_file = data_path + 'BDR_RECON_18-03-2024T14.14.29.fits'
+#recon_data = fits.open( recon_file )
 
 #image cropping coordinates 
 if 'cropping_corners_r1' in recon_data['poke_images'].header:
@@ -99,7 +72,73 @@ cp_x1,cp_x2,cp_y1,cp_y2 = recon_data[0].header['cp_x1'],recon_data[0].header['cp
 ci_x1,ci_x2,ci_y1,ci_y2 = recon_data[0].header['ci_x1'],recon_data[0].header['ci_x2'],recon_data[0].header['ci_y1'],recon_data[0].header['ci_y2']
 
  
-IM = recon_data['IM'].data # unfiltered
+
+raw_IM_data = recon_data['poke_images']
+number_amp_samples = int( raw_IM_data.header['#ramp steps']) 
+max_ramp = float(raw_IM_data.header['HIERARCH in-poke max amp']) 
+min_ramp = float(raw_IM_data.header['HIERARCH out-poke max amp']) 
+ramp_values = np.linspace( min_ramp, max_ramp, number_amp_samples)
+modal_basis = recon_data['BASIS'].data
+
+# ================================== This is what determines the poke amplitude for IM matrix
+poke_amp_indx = number_amp_samples//2 - 2 # the smallest positive value 
+# ==================================
+print( f'======\ncalculating IM for pokeamp = {ramp_values[poke_amp_indx]}\n=====:::' )
+
+# poke amplitude in DM command space used to generate IM 
+IM_pokeamp = ramp_values[poke_amp_indx]
+# dont forget to crop just square pupil region
+
+agregated_pupils = [np.median(raw_IM_data.data[i],axis=0) for i in range(len(raw_IM_data.data))]
+
+agregated_pupils_array = np.array( agregated_pupils[1:] ).reshape(number_amp_samples, modal_basis.shape[0],recon_data['FPM_IN'].data.shape[0], recon_data['FPM_IN'].data.shape[1])
+
+IM_unfiltered_unflat = [bdf.get_error_signal( agregated_pupils_array[poke_amp_indx][m], reference_pupil_fits=recon_data, reduction_dict=None, pupil_indicies = [cp_x1,cp_x2,cp_y1,cp_y2]) for m in range(modal_basis.shape[0])] # [mode, x, y]
+
+IM = [list(im.reshape(-1)) for im in IM_unfiltered_unflat]
+
+
+#plt.imshow( np.array(IM)[65].reshape([cp_x2-cp_x1,cp_y2-cp_y1]));
+#plt.colorbar();
+#plt.title('row 65 from unfiltered IM constructed ')
+#plt.show()
+
+
+# =====(2) 
+# --- setup camera
+fps = float( recon_data[1].header['camera_fps'] )
+camera = bdf.setup_camera(cameraIndex=0) #connect camera and init camera object
+camera = bdf.set_fsp_dit( camera, fps=fps, tint=None) # set up initial frame rate, tint=None means max integration time for given FPS
+
+
+# --- setup DM
+dm, dm_err_code =  bdf.set_up_DM(DM_serial_number='17DW019#053')
+
+# --- setup DM interaction and control matricies
+modal_basis = recon_data['BASIS'].data #
+# check modal basis dimensions are correct
+if modal_basis.shape[1] != 140:
+    raise TypeError( 'modal_basis.shape[1] != 140 => not right shape. Maybe we should transpose it?\nmodal_basis[i] should have a 140 length command for the DM corresponding to mode i')
+
+# poke amplitude in DM command space used to generate IM 
+#IM_pokeamp = float( recon_data['IM'].header['poke_amp_cmd'] )
+
+#image cropping coordinates 
+if 'cropping_corners_r1' in recon_data['poke_images'].header:
+    r1 = int(recon_data['poke_images'].header['cropping_corners_r1'])
+    r2 = int(recon_data['poke_images'].header['cropping_corners_r2'])
+    c1 = int(recon_data['poke_images'].header['cropping_corners_c1'])
+    c2 = int(recon_data['poke_images'].header['cropping_corners_c2'])
+    cropping_corners = [r1,r2,c1,c2]
+else:
+    cropping_corners = None
+
+# pupil cropping coordinates
+cp_x1,cp_x2,cp_y1,cp_y2 = recon_data[0].header['cp_x1'],recon_data[0].header['cp_x2'],recon_data[0].header['cp_y1'],recon_data[0].header['cp_y2']
+# PSF cropping coordinates 
+ci_x1,ci_x2,ci_y1,ci_y2 = recon_data[0].header['ci_x1'],recon_data[0].header['ci_x2'],recon_data[0].header['ci_y1'],recon_data[0].header['ci_y2']
+
+#IM = recon_data['IM'].data # unfiltered
 
 U,S,Vt = np.linalg.svd( IM ,full_matrices=True)
 
@@ -114,56 +153,28 @@ plt.gca().tick_params( labelsize=15 )
 
 Sfilt = S > 0.6
 Sigma = np.zeros( np.array(IM).shape, float)
-np.fill_diagonal(Sigma, 200 * S[Sfilt], wrap=False) #
+np.fill_diagonal(Sigma, 1/abs(IM_pokeamp) * S[Sfilt], wrap=False) #
 
 CM = np.linalg.pinv( U @ Sigma @ Vt ) # C = A @ M 
 
-#CM = recon_data['CM'].data # filtered
+#plt.imshow( CM[:,52].reshape(cp_x2-cp_x1,cp_y2-cp_y1) );plt.colorbar();plt.show()
 
-
-
-# have a look at one of the interaction images for a particular modal actuation
-# plt.imshow( IM[100].reshape(cp_x2-cp_x1,cp_y2-cp_y1) );plt.show()
-
-# =====(3)
-# create static phase screen on DM 
-
-scrn_scaling_factor = 0.1
-number_images_recorded_per_cmd = 20 #NDITs to take median over 
+number_images_recorded_per_cmd = 5 #NDITs to take median over 
 PID = [1, 0, 0] # proportional, integator, differential gains  
 Nint = 1 # used for integral term.. should be calcualted later. TO DO 
 dt_baldr = 1  # used for integral term.. should be calcualted later. TO DO  
 
-save_fits = data_path + f'closed_loop_on_static_aberration_disturb-kolmogorov_amp-{scrn_scaling_factor}_PID-{PID}_t-{tstamp}.fits'
-
-"""
-# --- create infinite phasescreen from aotools module 
-Nx_act = dm.num_actuators_width()
-scrn = aotools.infinitephasescreen.PhaseScreenVonKarman(nx_size=Nx_act*2**5, pixel_scale=1.8/(Nx_act*2**5),r0=0.1,L0=12)
-
-corner_indicies = [0, Nx_act-1, Nx_act * (Nx_act-1), -1] # Beware -1 index doesn't work if inserting in list! This is  ok for for use with create_phase_screen_cmd_for_DM function.
-
-disturbance_cmd = bdf.create_phase_screen_cmd_for_DM(scrn=scrn, DM=dm, flat_reference=flat_dm_cmd, scaling_factor = scrn_scaling_factor, drop_indicies = corner_indicies, plot_cmd=False)  # normalized flat_dm +- scaling_factor?
-
-# for visualization get the 2D grid of the disturbance on DM  
-#plt.imshow( bdf.get_DM_command_in_2D(disturbance_cmd, Nx_act=12) ); plt.show()
-#plt.close() 
-"""
 
 disturbance_cmd = np.zeros( len( flat_dm_cmd ))  
-disturbance_cmd[np.array([5,16,28,40,52,64])]=0.06
-disturbance_cmd += flat_dm_cmd.copy()
+disturbance_cmd[np.array([65,53,41,64,52,40])]=0.03
+#disturbance_cmd[np.array([5,16,28,40,52,64])]=0.03 # disturbance is ~zero mean! 
+# disturbance_cmd += flat_dm_cmd.copy() 
 
 plt.figure()
 plt.title( 'static aberration to apply to DM')
 plt.imshow( bdf.get_DM_command_in_2D(disturbance_cmd, Nx_act=12) ); plt.show()
 
-print(' \n\n applying static aberration and closing loop')
-# apply DISTURBANCE 
-dm.send_data( disturbance_cmd )
-
-# =====(6)
-# NOW try to correct it! 
+dm.send_data( flat_dm_cmd + disturbance_cmd )
 
 # init main fits file for saving telemetry
 static_ab_performance_fits = fits.HDUList([])
@@ -189,31 +200,13 @@ ERR_list = [ ]# list( np.nan * np.zeros( int( (cp_x2 - cp_x1) * (cp_y2 - cp_y1) 
 RMS_list = [] # to hold std( cmd - aber ) for each iteration
   
 
-modal_gains = IM_pokeamp * np.ones(len(modal_basis[0]))
+modal_gains = 0.5 * np.ones(len(modal_basis[0]))
 
-
-"""
-setting PI parameters https://www.zhinst.com/ch/en/resources/principles-of-pid-controllers?gclid=CjwKCAiApaarBhB7EiwAYiMwqi06BUUcq6C11e3tHueyTd7x1DqVrk9gi8xLmtLwUBRCT4nW7EsJnxoCz4oQAvD_BwE&hsa_acc=8252128723&hsa_ad=665555823596&hsa_cam=14165786829&hsa_grp=126330066395&hsa_kw=pid%20controller&hsa_mt=p&hsa_net=adwords&hsa_src=g&hsa_tgt=kwd-354990109332&hsa_ver=3&utm_campaign=PID%20Group&utm_medium=ppc&utm_source=adwords&utm_term=pid%20controller
-    https://apmonitor.com/pdc/index.php/Main/ProportionalIntegralControl#:~:text=Discrete%20PI%20Controller,the%20integral%20of%20the%20error.
-    1. Set the P,I, and D gain to zero
-    2. Increase the proportional (P) gain until the system starts to show consistent and stable oscillation. This value is known as the ultimate gain (Ku).
-    3. Measure the period of the oscillation (Tu).
-    4. Depending on the desired type of control loop (P, PI or PID) set the gains to the following values:
-   
-Nint = 2
-dt_baldr = number_images_recorded_per_cmd/fps
-Tu = Nint * dt_baldr
-PID[1] = 0.54 * Ku/Tu #0.9    #0.75 #0.0
-PID[0] = 0.45 * Ku #1 #0.45 * Ku # 1.1 #1. #2.
-""" 
-
-#modal_reco_list = CM.T @ (  1/Nph_obj * (sig_turb.signal - Nph_obj/Nph_cal * sig_cal_on.signal) ).reshape(-1) #list of amplitudes of the modes measured by the ZWFS
-#        modal_gains = -1. * S_filt  / np.max(S_filt) 
 
 
 FliSdk_V2.Start(camera)    
 time.sleep(1)
-for i in range(10):
+for i in range(5):
 
     # get new image and store it (save pupil and psf differently)
     IMG_list.append( list( np.median( bdf.get_raw_images(camera, number_of_frames=number_images_recorded_per_cmd, cropping_corners=cropping_corners) , axis=0)  ) ) 
@@ -255,14 +248,14 @@ for i in range(10):
     """
 
     # check dm commands are within limits 
-    if np.max(cmdtmp)>1:
+    if np.max(cmdtmp+flat_dm_cmd)>1:
         print(f'WARNING {sum(cmdtmp>1)} DM commands exceed max value of 1') 
-        cmdtmp[cmdtmp>1] = 1 #force clip
-    if np.min(cmdtmp)<0:
+        cmdtmp[cmdtmp+flat_dm_cmd>1] = 0.4 #force clip
+    if np.min(cmdtmp+flat_dm_cmd)<0:
         print(f'WARNING {sum(cmdtmp<0)} DM commands exceed min value of 0') 
-        cmdtmp[cmdtmp<0] = 0 # force clip
+        cmdtmp[cmdtmp+flat_dm_cmd<0] = -0.4 # force clip
     # finally append it:
-    CMD_list.append( CMD_list[-1] - cmdtmp )
+    CMD_list.append( CMD_list[-1] + cmdtmp ) # CMD_list begins as flat DM 
     RMS_list.append( np.std( np.array(CMD_list[-1]) - np.array(disturbance_cmd) ) )
     # apply control command to DM + our static disturbance 
     dm.send_data( CMD_list[-1] + disturbance_cmd ) 
@@ -271,9 +264,6 @@ for i in range(10):
 dm.send_data( flat_dm_cmd ) 
 
 camera_info_dict = bdf.get_camera_info( camera )
-
-FliSdk_V2.Stop(camera)
-
 
 
 IMG_fits = fits.PrimaryHDU( IMG_list )
@@ -313,51 +303,58 @@ for f in [disturbfits, IMfits, CMfits, IMG_fits, RES_fits, RECO_fits, ERR_fits, 
     static_ab_performance_fits.append( f ) 
 
 #save data! 
+save_fits = data_path + f'closed_loop_on_static_aberration_PID-{PID}_t-{tstamp}.fits'
 static_ab_performance_fits.writeto( save_fits )
 
 
+data = static_ab_performance_fits
 
+# plot the images 
+plt.figure()
+plt.imshow( np.rot90( bdf.get_DM_command_in_2D(data['DISTURBANCE'].data).T,2) )
+plt.colorbar()
+#plt.savefig(fig_path + f'static_aberration_{tstamp}.png') 
+#plt.savefig(fig_path + f'dynamic_aberration_{tstamp}.png') 
+plt.show()
 
-# PLOTTING SOME RESULTS 
-psf_max = np.array( [ np.max( psf[ci_x1:ci_x2,ci_y1:ci_y2] )  for psf in static_ab_performance_fits['IMAGES'].data] )
-
-psf_max_ref = np.max( recon_data['FPM_OUT'].data[ci_x1:ci_x2,ci_y1:ci_y2] )
-
-fig,ax = plt.subplots( 4,2,figsize=(7,30))
-ax[0,0].plot( static_ab_performance_fits['RMS'].data )
-ax[0,0].set_ylabel('RMS in cmd space')
-ax[0,0].set_xlabel('iteration')
-
-ax[0,1].plot( psf_max/psf_max_ref )
-ax[0,1].set_ylabel('max(I) / max(I_ref)')
-ax[0,1].set_xlabel('iteration')
-
-
-ax[1,0].imshow( recon_data['FPM_IN'].data[cp_x1:cp_x2,cp_y1:cp_y2] )
-ax[1,0].set_title('reference pupil (FPM IN)')
-
-ax[2,0].imshow( static_ab_performance_fits['IMAGES'].data[0][cp_x1:cp_x2,cp_y1:cp_y2]  )
-ax[2,0].set_title('initial pupil with disturbance')
-
-ax[3,0].imshow( static_ab_performance_fits['IMAGES'].data[-1][cp_x1:cp_x2,cp_y1:cp_y2]  ) 
-ax[3,0].set_title('final pupil after 10 iterations')
-
-
-ax[1,1].imshow( recon_data['FPM_OUT'].data[ci_x1:ci_x2,ci_y1:ci_y2] )
-ax[1,1].set_title('reference PSF')
-
-ax[2,1].imshow( static_ab_performance_fits['IMAGES'].data[0][ci_x1:ci_x2,ci_y1:ci_y2]  )
-ax[2,1].set_title('initial PSF with disturbance')
-
-ax[3,1].imshow( static_ab_performance_fits['IMAGES'].data[-1][ci_x1:ci_x2,ci_y1:ci_y2]  ) 
-ax[3,1].set_title('final PSF after 10 iterations')
-
-plt.subplots_adjust(wspace=0.5, hspace=0.5)
-#plt.savefig(fig_path + f'closed_loop_on_static_aberration_RESULTS_disturb-kolmogorov_amp-{scrn_scaling_factor}_PID-{PID}_t-{tstamp}.png') 
+plt.figure()
+plt.plot( RMS_list )
+plt.ylabel('RMSE CMD SPACE')
 plt.show() 
 
+fig,ax = plt.subplots( data['IMAGES'].data.shape[0]+1,3,figsize=(5,1.5*data['IMAGES'].data.shape[0]) )
+plt.subplots_adjust(hspace=0.5,wspace=0.5)
+im00=ax[0,0].imshow( np.rot90( bdf.get_DM_command_in_2D(flat_dm_cmd + disturbance_cmd ).T,2 ) )
+plt.colorbar(im00, ax=ax[0,0])
+ax[0,0].set_title('disturbance + flat cmd')
+for i, (im, err, cmd) in enumerate( zip(data['IMAGES'].data, data['ERRS'].data, data['CMDS'].data[1:])):
+    imA = ax[i+1,0].imshow( im )
+    errA = ax[i+1,1].imshow(np.rot90( bdf.get_DM_command_in_2D(err).T,2))
+    cmdA = ax[i+1,2].imshow(np.rot90( bdf.get_DM_command_in_2D(cmd).T,2))
+    for A,axx in zip([imA,errA,cmdA], [ax[i+1,0],ax[i+1,1],ax[i+1,2]]): 
+        plt.colorbar(A, ax=axx)
+        axx.axis('off')
+    ax[i+1,0].set_title(f'image {i}')
+    ax[i+1,1].set_title(f'err {i}') 
+    ax[i+1,2].set_title(f'cmd {i}') 
+#plt.savefig(fig_path + f'closed_loop_iterations_{tstamp}.png') 
+plt.show()
 
 
+i=3
+fig,ax = plt.subplots(1,3,figsize=(15,5))
+
+ax[0].set_title(f'cmd iteration {i}')
+im0 = ax[0].imshow(np.rot90( bdf.get_DM_command_in_2D(CMD_list[1]-flat_dm_cmd).T,2))
+plt.colorbar(im0,ax=ax[0])
+
+im1 = ax[1].imshow(np.rot90( bdf.get_DM_command_in_2D(disturbance_cmd + flat_dm_cmd).T,2))
+plt.colorbar(im1,ax=ax[1])
+
+ax[2].set_title(f'residual cmd {i}')
+im2 = ax[2].imshow(np.rot90( bdf.get_DM_command_in_2D(CMD_list[1]-flat_dm_cmd).T,2)-np.rot90( bdf.get_DM_command_in_2D(disturbance_cmd ).T,2))
+plt.colorbar(im2,ax=ax[2])
+plt.show()
 
 
 

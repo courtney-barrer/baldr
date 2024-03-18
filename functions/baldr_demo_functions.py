@@ -167,7 +167,35 @@ def get_camera_info(camera):
     
     return(camera_info_dict)
    
-def watch_camera(camera, frames_to_watch = 10, time_between_frames=0.01) :
+
+def get_raw_images(camera, number_of_frames, cropping_corners=None):
+
+    camera_started = FliSdk_V2.IsStarted(camera)
+
+    #check if camera has started 
+    if not camera_started:
+        FliSdk_V2.Start(camera)
+        time.sleep(1) # wait 1 second to start 
+    if type(cropping_corners)==type([]):
+        if len(cropping_corners)==4:
+            x1,x2,y1,y2 = cropping_corners
+            images = [FliSdk_V2.GetRawImageAsNumpyArray(camera,-1)[int(x1):int(x2), int(y1):int(y2)] for i in range(number_of_frames)]
+        else:
+            raise TypeError('cropping_corners must be list of integers of length 4 corresponding to [row min, row max, col min, col max]')
+
+    else:
+        images = [FliSdk_V2.GetRawImageAsNumpyArray(camera,-1) for i in range(number_of_frames)]
+        
+
+    if not camera_started: # if the camera wasn't started when we started, then we stop it again before finishing
+        FliSdk_V2.Stop(camera)  
+    
+    
+    return(images)
+
+
+
+def watch_camera(camera, frames_to_watch = 10, time_between_frames=0.01,cropping_corners=None) :
   
     print( f'{frames_to_watch} frames to watch with ~{time_between_frames}s wait between frames = ~{5*time_between_frames*frames_to_watch}s watch time' )
 
@@ -176,11 +204,16 @@ def watch_camera(camera, frames_to_watch = 10, time_between_frames=0.01) :
     plt.ion() # turn on interactive mode 
     FliSdk_V2.Start(camera)     
     seconds_passed = 0
+    if type(cropping_corners)==list: 
+        x1,x2,y1,y2 = cropping_corners #[row min, row max, col min, col max]
 
     for i in range(int(frames_to_watch)): 
         
         a=FliSdk_V2.GetRawImageAsNumpyArray(camera,-1)
-        plt.imshow(a)
+        if type(cropping_corners)==list: 
+            plt.imshow(a[x1:x2,y1:y2])
+        else: 
+            plt.imshow(a)
         plt.pause( time_between_frames )
         #time.sleep( time_between_frames )
         plt.clf() 
@@ -221,7 +254,7 @@ def set_up_DM(DM_serial_number='17DW019#053'):
    
 
    
-def apply_sequence_to_DM_and_record_images(DM, camera, DM_command_sequence, number_images_recorded_per_cmd = 1, save_dm_cmds = True, calibration_dict=None, additional_header_labels=None,sleeptime_between_commands=0.01, save_fits = None):
+def apply_sequence_to_DM_and_record_images(DM, camera, DM_command_sequence, number_images_recorded_per_cmd = 1, take_median_of_images=False, save_dm_cmds = True, calibration_dict=None, additional_header_labels=None, sleeptime_between_commands=0.01, cropping_corners=None, save_fits = None):
     """
     
 
@@ -236,6 +269,8 @@ def apply_sequence_to_DM_and_record_images(DM, camera, DM_command_sequence, numb
         Na is number actuators on DM (columns).   
     number_images_recorded_per_cmd : TYPE, optional
         DESCRIPTION. The default is 1. puting a value >= 0 means no images are recorded.
+    take_median_of_images: TYPE, optional
+        DESCRIPTION. The default is False. if True we take the median image of number_images_recorded_per_cmd such that there is only one image per command (that is the aggregated image)
     calibration_dict: TYPE, optional
         DESCRIPTION. The default is None meaning saved images don't get flat fielded. 
         if flat fielding is required a dictionary must be supplied that contains 
@@ -244,6 +279,8 @@ def apply_sequence_to_DM_and_record_images(DM, camera, DM_command_sequence, numb
         DESCRIPTION. The default is None which means no additional header is appended to fits file 
         otherwise a tuple (header, value) or list of tuples [(header_0, value_0)...] can be used. 
         If list, each item in list will be added as a header. 
+    cropping_corners: TYPE, optional
+        DESCRIPTION. list of length 4 holding [row min, row max, col min, col max] to crop raw data frames.
     save_fits : TYPE, optional
         DESCRIPTION. The default is None which means images are not saved, 
         if a string is provided images will be saved with that name in the current directory
@@ -276,8 +313,12 @@ def apply_sequence_to_DM_and_record_images(DM, camera, DM_command_sequence, numb
 
 
         if should_we_record_images: 
-            
-            image_list.append( [FliSdk_V2.GetRawImageAsNumpyArray(camera,-1)  for i in range(number_images_recorded_per_cmd)] )
+            if take_median_of_images:
+                ims_tmp = [np.median(get_raw_images(camera, number_images_recorded_per_cmd, cropping_corners) , axis=0)] #keep as list so it is the same type as when take_median_of_images=False
+            else:
+                ims_tmp = get_raw_images(camera, number_images_recorded_per_cmd, cropping_corners) 
+            image_list.append( ims_tmp )
+
     
     FliSdk_V2.Stop(camera) # stop camera
     
@@ -294,7 +335,13 @@ def apply_sequence_to_DM_and_record_images(DM, camera, DM_command_sequence, numb
         for k,v in camera_info_dict.items():
             cam_fits.header.set(k,v)
         cam_fits.header.set('#images per DM command', number_images_recorded_per_cmd )
-        
+        cam_fits.header.set('take_median_of_images', take_median_of_images )
+        if cropping_corners!=None:
+            cam_fits.header.set('cropping_corners_r1', cropping_corners[0] )
+            cam_fits.header.set('cropping_corners_r2', cropping_corners[1] )
+            cam_fits.header.set('cropping_corners_c1', cropping_corners[2] )
+            cam_fits.header.set('cropping_corners_c2', cropping_corners[3] )
+
         #if user specifies additional headers using additional_header_labels
         if (additional_header_labels!=None): 
             if type(additional_header_labels)==list:
@@ -331,7 +378,7 @@ def apply_sequence_to_DM_and_record_images(DM, camera, DM_command_sequence, numb
 
 
     
-def scan_detector_framerates(camera, frame_rates, number_images_recorded_per_cmd = 50, save_fits = None): 
+def scan_detector_framerates(camera, frame_rates, number_images_recorded_per_cmd = 50, cropping_corners=None, save_fits = None): 
     """
     iterate through different camera frame rates and record a series of images for each
     this can be used for building darks or flats.
@@ -368,7 +415,9 @@ def scan_detector_framerates(camera, frame_rates, number_images_recorded_per_cmd
 	
         time.sleep(1) # wait 1 second
         #tmp_fits = fits.PrimaryHDU( [FliSdk_V2.GetProcessedImageGrayscale16bNumpyArray(camera,-1)  for i in range(number_images_recorded_per_cmd)] )
-        tmp_fits = fits.PrimaryHDU( [FliSdk_V2.GetRawImageAsNumpyArray(camera,-1)  for i in range(number_images_recorded_per_cmd)] )
+
+        tmp_fits = fits.PrimaryHDU(  get_raw_images(camera, number_images_recorded_per_cmd, cropping_corners) )
+
         
         camera_info_dict = get_camera_info(camera)
         for k,v in camera_info_dict.items():
@@ -443,9 +492,9 @@ def _set_regions_manually(xyr_list):
         
     return(xyr_list) 
 
-def detect_pupil_and_PSF_region(camera, fps = 600 , plot_results = True, save_fits = None): 
+def detect_pupil_and_PSF_region(camera, fps = 600 , plot_results = True, cropping_corners=None, save_fits = None): 
 
-    data = scan_detector_framerates(camera, [fps], number_images_recorded_per_cmd = 50, save_fits = None)
+    data = scan_detector_framerates(camera, [fps], number_images_recorded_per_cmd = 50, cropping_corners=cropping_corners, save_fits = None)
      
     im = np.median( data[0].data, axis=0 ) #take median of however many images we recorded
     gray_scale_image = np.array( 2**8 * (im - np.min(im)) / (np.max(im) - np.min(im)) , dtype = np.uint8 )
@@ -478,7 +527,7 @@ def detect_pupil_and_PSF_region(camera, fps = 600 , plot_results = True, save_fi
         #plt.close()
     
     
-    set_regions_manually = float(input('\nif you are happy with detected regions input 0, otherwise input 1 to manually set masked regions. \n\n---(try (x,y,r) = 155,216,50 for pupil, 301,247,20 for PSF)\n'))
+    set_regions_manually = float(input('\nif you are happy with detected regions input 0, otherwise input 1 to manually set masked regions. \n\n---(try (x,y,r) = 65,75,45 for pupil, 160,103,30 for PSF)\n'))
 
             
     if set_regions_manually:
@@ -574,7 +623,7 @@ def get_DM_command_in_2D(cmd,Nx_act=12):
     return( np.array(cmd_in_2D).reshape(12,12) )
     
 
-def get_reference_pupils(DM, camera, fps, flat_map, number_images_recorded_per_cmd=50, crop=None, save_fits=None):
+def get_reference_pupils(DM, camera, fps, flat_map, number_images_recorded_per_cmd=50, cropping_corners=None,  save_fits=None):
     """
     beam aligned on phase dot, we grab some images of FPM in ( I(theta=phi/2 ) )
     then apply offset so that FPM is out ( I(theta=0 ) ) and record these two images 
@@ -596,7 +645,7 @@ def get_reference_pupils(DM, camera, fps, flat_map, number_images_recorded_per_c
     watch_camera(camera, frames_to_watch = frames_to_watch, time_between_frames=0.05)
 
     # RECORD FPM-OUT IMAGE 
-    data_fpm_out = apply_sequence_to_DM_and_record_images(DM, camera, DM_command_sequence, number_images_recorded_per_cmd = 50, save_dm_cmds = True, calibration_dict=None, additional_header_labels=[('FPM_status','OUT')],sleeptime_between_commands=0.01, save_fits = None)
+    data_fpm_out = apply_sequence_to_DM_and_record_images(DM, camera, DM_command_sequence, number_images_recorded_per_cmd = 50, save_dm_cmds = True, calibration_dict=None, additional_header_labels=[('FPM_status','OUT')],sleeptime_between_commands=0.01,cropping_corners=cropping_corners, save_fits = None)
 
     print('\n=======\n ADJUST FOCAL PLANE MASK SO THAT DOT IS ON AXIS (PHASE SHIFT APPLIED!)') 
 
@@ -606,7 +655,7 @@ def get_reference_pupils(DM, camera, fps, flat_map, number_images_recorded_per_c
 
 
     # RECORD FPM-IN IMAGE 
-    data_fpm_in = apply_sequence_to_DM_and_record_images(DM, camera, DM_command_sequence, number_images_recorded_per_cmd = 50, save_dm_cmds = True, calibration_dict=None, additional_header_labels=[('FPM_status','IN')],sleeptime_between_commands=0.01, save_fits = None)
+    data_fpm_in = apply_sequence_to_DM_and_record_images(DM, camera, DM_command_sequence, number_images_recorded_per_cmd = 50, save_dm_cmds = True, calibration_dict=None, additional_header_labels=[('FPM_status','IN')],sleeptime_between_commands=0.01,cropping_corners=cropping_corners, save_fits = None)
 
     # take median frame over each image set
     fpm_in_fits = fits.PrimaryHDU( np.median( data_fpm_in[0].data[0] , axis = 0) )
@@ -633,20 +682,23 @@ def get_reference_pupils(DM, camera, fps, flat_map, number_images_recorded_per_c
         
     return(data) 
 
-def get_error_signal( image, reference_pupil_fits, reduction_dict=None, crop_indicies = None ): 
+
+
+
+def get_error_signal( image, reference_pupil_fits, reduction_dict=None, pupil_indicies = None ): 
     """
     signal processing for getting error vector from an input image from the ZWFS. 
     This error vector can be fed back with PID gains  for closed loop operation   
     - image is the image to turn into control signal
     - reference_pupil_fits is a fits file with images of the pupil with FPM in and out, it is the output of get_reference_pupils() function 
     - reduction_dict is a dictionary with darks biases etc if we want to reduce signals before processing 
-    - crop_indicies is list of indicies to crop images. i.e crop_indicies=[x1,x2,y1,y2]. For no cropping crop_indicies=None, which is default
+    - pupil_indicies is list of indicies to crop pupil in the image. i.e pupil_indicies=[x1,x2,y1,y2]. For no cropping pupil_indicies=None, which is default
     """
     if reduction_dict==None:
-        if crop_indicies == None: # no cropping of images 
+        if pupil_indicies == None: # no cropping of pupil in images 
             Serr = ( image - reference_pupil_fits['FPM_IN'].data ) /  np.mean( reference_pupil_fits['FPM_OUT'].data )
         else : 
-            x1,x2,y1,y2 = crop_indicies
+            x1,x2,y1,y2 = pupil_indicies
             Serr = ( image[x1:x2,y1:y2] - reference_pupil_fits['FPM_IN'].data[x1:x2,y1:y2] ) /  np.mean( reference_pupil_fits['FPM_OUT'].data[x1:x2,y1:y2] )
     else:
         raise TypeError('to do: include reduction from deduction dictionary') 
