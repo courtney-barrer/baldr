@@ -142,9 +142,10 @@ DM_command_sequence = [flat_dm_cmd] + list( np.array(_DM_command_sequence).resha
 additional_labels = [('cp_x1',cp_x1),('cp_x2',cp_x2),('cp_y1',cp_y1),('cp_y2',cp_y2),('ci_x1',ci_x1),('ci_x2',ci_x2),('ci_y1',ci_y1),('ci_y2',ci_y2),('in-poke max amp', np.max(ramp_values)),('out-poke max amp', np.min(ramp_values)),('#ramp steps',number_amp_samples), ('seq0','flatdm'), ('reshape',f'{number_amp_samples}-{modal_basis.shape[0]}-{modal_basis.shape[1]}'),('Nmodes_poked',len(modal_basis)),('Nact',140)]
 
 # --- poke DM in and out and record data. Extension 0 corresponds to images, extension 1 corresponds to DM commands
-raw_IM_data = bdf.apply_sequence_to_DM_and_record_images(dm, camera, DM_command_sequence, number_images_recorded_per_cmd = number_images_recorded_per_cmd, take_median_of_images=True, save_dm_cmds = True, calibration_dict=None, additional_header_labels = additional_labels,sleeptime_between_commands=0.01, cropping_corners=cropping_corners,  save_fits = data_path + f'rampdata_ampMax-{amp_max}_Nsamp-{number_amp_samples}_Nim_p_cmd-{number_images_recorded_per_cmd}_fps-{fps}_imregion-{np.array(cropping_corners,dtype=int)}_{tstamp}.fits' ) # None
+raw_IM_data = bdf.apply_sequence_to_DM_and_record_images(dm, camera, DM_command_sequence, number_images_recorded_per_cmd = number_images_recorded_per_cmd, take_median_of_images=True, save_dm_cmds = True, calibration_dict=None, additional_header_labels = additional_labels,sleeptime_between_commands=0.03, cropping_corners=cropping_corners,  save_fits = data_path + f'rampdata_ampMax-{amp_max}_Nsamp-{number_amp_samples}_Nim_p_cmd-{number_images_recorded_per_cmd}_fps-{fps}_imregion-{np.array(cropping_corners,dtype=int)}_{tstamp}.fits' ) # None
 
 dm.send_data(flat_dm_cmd) 
+time.sleep(0.1)
 FliSdk_V2.Stop(camera)
 time.sleep(1)
 

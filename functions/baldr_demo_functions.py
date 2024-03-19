@@ -310,7 +310,8 @@ def apply_sequence_to_DM_and_record_images(DM, camera, DM_command_sequence, numb
         time.sleep(sleeptime_between_commands)
         # ok, now apply command
         DM.send_data(cmd)
-
+        # wait a sec        
+        time.sleep(sleeptime_between_commands)
 
         if should_we_record_images: 
             if take_median_of_images:
