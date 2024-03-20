@@ -161,7 +161,7 @@ num_pixels = []
 candidate_thresholds = np.linspace(100,3000,16)
 for axx, thresh in zip(ax.reshape(-1),candidate_thresholds):
     
-    dm_pupil_filt = thresh < np.array( [np.max( abs( poke_imgs[len(poke_imgs)//2-1][i] - flat_img) ) for i in range(140)] ) 
+    dm_pupil_filt = thresh < np.array( [np.max( abs( poke_imgs[len(poke_imgs)//2-2][i] - flat_img) ) for i in range(140)] ) 
     axx.imshow( bdf.get_DM_command_in_2D( dm_pupil_filt  ) ) 
     axx.set_title('threshold = {}'.format(round( thresh )),fontsize=12) 
     axx.axis('off')
@@ -194,7 +194,7 @@ if plot_fits:
 for act_indx in range(140): 
     if dm_pupil_filt[act_indx]:
         try:
-            amp_indx = len(poke_imgs)//2-1 # CHOOSE THE AMPLITUDE TO USE FOR FINDING THE PEAKS! WORKS BEST FOR COMMANDS < FLAT DM WHERE WE HAVE BETTER LINERARITY 
+            amp_indx = len(poke_imgs)//2-2 # CHOOSE THE AMPLITUDE TO USE FOR FINDING THE PEAKS! WORKS BEST FOR COMMANDS < FLAT DM WHERE WE HAVE BETTER LINERARITY 
             indx_at_peak = np.argmax( abs( poke_imgs[amp_indx][act_indx] - flat_img ) )
             pixel_indx_dict[act_indx] = indx_at_peak
             mask[indx_at_peak] = 1
@@ -237,7 +237,10 @@ for act_indx in range(140):
                 j+=1
                 """
                 fig,ax = plt.subplots(1,2)
-                ax[0].set_title(act_indx)
+                ax[0].sact_indx = 0
+amp_indx = 8
+delta_c = reconstruct_delta_command( poke_imgs[amp_indx][act_indx], param_dict, pixel_indx_dict )
+et_title(act_indx)
                 ax[0].plot( ramp_values, func(ramp_values, A_opt, B_opt, F_opt, mu_opt)/ Pi**2 ,label='fit') 
                 ax[0].plot( ramp_values, I_v_ramp / Pi**2 ,label='measured')
                 ax[0].set_xlabel( 'normalized DM command')
@@ -249,6 +252,24 @@ for act_indx in range(140):
             print('failed for act', act_indx)
 if plot_fits:
     plt.show()
+
+
+# TEST AGAIN CAN WE RECONSTRUCT THE INPUT DATA
+act_indx = 60
+amp_indx = 5
+delta_c = reconstruct_delta_command( poke_imgs[amp_indx][act_indx], param_dict, pixel_indx_dict )
+plt.plot( delta_c );plt.show()
+
+I_meas = np.array( [poke_imgs[a][act_indx].reshape(-1)[pixel_indx_dict[act_indx]] for a in range(len( poke_imgs))])
+A_opt, B_opt, F_opt, mu_opt = param_dict[act_indx]
+I_theory = func(ramp_values, A_opt, B_opt, F_opt, mu_opt)
+plt.plot( ramp_values, I_meas ); plt.plot(ramp_values,I_theory)
+plt.show() 
+
+
+for i in pixel_indx_dict:
+    delta_c = reconstruct_delta_command( poke_imgs[amp_indx][i], param_dict, pixel_indx_dict )
+    plt.plot(delta_c)
 
 
 # =====(2) 
@@ -269,7 +290,7 @@ if modal_basis.shape[1] != 140:
 # =====(3)
 # set up parameters 
 
-number_images_recorded_per_cmd = 20 #NDITs to take median over 
+number_images_recorded_per_cmd = 5 #NDITs to take median over 
 
 save_fits = data_path + f'closed_loop_on_static_aberration_disturb-kolmogorov_t-{tstamp}.fits'
 
@@ -278,10 +299,20 @@ save_fits = data_path + f'closed_loop_on_static_aberration_disturb-kolmogorov_t-
 
 # NOTE WE ONLY APPLY DISTURVBANCE WITHIN DM INFLUENCE REGION (using dm_pupil_filt)
 
-disturbance_cmd = np.zeros( len( flat_dm_cmd ))  
-disturbance_cmd[64]=0.06
+#disturbance_cmd = np.zeros( len( flat_dm_cmd ))  
+#disturbance_cmd[64] = 0.02
+
+modes = bdf.construct_command_basis(dm , basis='Zernike', number_of_modes = 20, actuators_across_diam = 'full',flat_map=None)
+
+mode_keys = list(modes.keys())
+
+disturbance_cmd = 0.4 * ( flat_dm_cmd - modes[mode_keys[10]] ) 
+
+
 #disturbance_cmd[np.array([5,16,28,40,52,64])]=0.06
-disturbance_cmd += flat_dm_cmd.copy()
+#disturbance_cmd += flat_dm_cmd.copy()
+
+
 
 # for visualization get the 2D grid of the disturbance on DM  
 plt.figure()
@@ -307,7 +338,7 @@ RMS_list = [ np.std( - disturbance_cmd ) ] # to hold std( cmd - aber ) for each 
  
 
 # start with flat DM
-dm.send_data( flat_dm_cmd )
+dm.send_data( flat_dm_cmd + disturbance_cmd)
 
 FliSdk_V2.Start(camera)    
 time.sleep(1)
@@ -320,9 +351,11 @@ for i in range(10):
 
     delta_c = reconstruct_delta_command( IMG_list[-1][cp_x1:cp_x2, cp_y1:cp_y2], param_dict, pixel_indx_dict )
     
+    plt.figure();plt.plot(delta_c); plt.plot(disturbance_cmd,label='dist');plt.legend();plt.show()
+
     ERR_list.append( delta_c ) 
     
-    CMD_list.append( list(flat_dm_cmd) - delta_c )
+    CMD_list.append( list(flat_dm_cmd) - delta_c  )
 
     dm.send_data(  CMD_list[-1] + disturbance_cmd ) 
     # record RMS in command space 
@@ -330,8 +363,10 @@ for i in range(10):
 
     time.sleep(0.05)
 
+
+
 fig,ax = plt.subplots(1,2); 
-im0=ax[0].imshow( bdf.get_DM_command_in_2D(ERR_list[-1]) ) ;plt.colorbar(im0,ax=ax[0]); im1=ax[1].imshow( bdf.get_DM_command_in_2D(disturbance_cmd) ) ;plt.colorbar(im1,ax=ax[1]); 
+im0=ax[0].imshow( bdf.get_DM_command_in_2D( ERR_list[0] ) ) ;plt.colorbar(im0,ax=ax[0]); im1=ax[1].imshow( bdf.get_DM_command_in_2D( disturbance_cmd) ) ;plt.colorbar(im1,ax=ax[1]); 
 plt.show()
 
 # now flatten once finished
