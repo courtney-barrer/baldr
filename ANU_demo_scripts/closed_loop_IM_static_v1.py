@@ -76,7 +76,7 @@ else: # just read it in
     ref_pupils = fits.open( reference_pupils_path )
 ref_pupils
 
-number_images_recorded_per_cmd = 10 # how many images do we take before taking median for signal processing 
+number_images_recorded_per_cmd = 5 # how many images do we take before taking median for signal processing 
 
 modal_basis = np.eye(140)
 IM_pokeamp = -0.03 # normalized DM units
@@ -87,7 +87,7 @@ for i in range(len(modal_basis)):
     cmdtmp = np.zeros(140)
     cmdtmp[i] = IM_pokeamp
     dm.send_data( flat_dm_cmd + cmdtmp )
-    time.sleep(0.1)
+    time.sleep(0.05)
     im = np.median( bdf.get_raw_images(camera, number_of_frames=number_images_recorded_per_cmd, cropping_corners=cropping_corners) , axis=0)
     errsig =  bdf.get_error_signal( im, reference_pupil_fits = ref_pupils, reduction_dict=None, pupil_indicies = [cp_x1,cp_x2,cp_y1,cp_y2] )
 
@@ -119,8 +119,8 @@ print( f'CM condition = {np.linalg.cond(CM)}' )
 noise_level_IM = np.mean(IM)+5*np.std(IM)  #0.1
 
 zonal_gains = np.sum( abs(IM) > noise_level_IM, axis=1)/np.max( np.sum( abs(IM) > noise_level_IM, axis=1))
+zonal_gains **= 1 # reduce curvature
 
-#modal_gains **= 0.5 # reduce curvature
 cmd_region_filt = zonal_gains > 0  # to filter where modal gains are non-zero (i.e. we can actuate here)
 
 if plot_all: 
@@ -129,8 +129,6 @@ if plot_all:
     plt.imshow( bdf.get_DM_command_in_2D( zonal_gains ) )
     plt.colorbar()
 
-# ----------- include zonal gains in CM !!!!!!!!
-CM *= zonal_gains
 
 
 # can check we get reconstuction by sending a cmd, recording control signal and reconstructing
@@ -170,56 +168,53 @@ if plot_all:
 
     plt.figure();plt.title('cmd noise RMS after injecting detector noise in act 65');plt.imshow( bdf.get_DM_command_in_2D( fake_im @ CM ) );plt.colorbar();plt.show()
 
-# ====== modal gains
-modal_gains = np.ones(len(flat_dm_cmd))
 
 
 # ======= init disturbance
 
-modes = bdf.construct_command_basis(dm , basis='Zernike', number_of_modes = 20, actuators_across_diam = 'full',flat_map=None)
-
-mode_keys = list(modes.keys())
-
-#zernike like disturbance
-#disturbance_cmd = 0.6*cmd_region_filt * ( flat_dm_cmd - modes[mode_keys[10]] )
-
-# square bump disturbance
 disturbance_cmd = np.zeros( len( flat_dm_cmd )) 
 disturbance_cmd[np.array([40,41,52,53,64,65])]=-0.1
+
+
 if plot_all:
+    # for visualization get the 2D grid of the disturbance on DM  
     plt.figure()
-    plt.title( f'static aberration to apply to DM (std = {np.std(disturbance_cmd)} in cmd space')
     plt.imshow( bdf.get_DM_command_in_2D(disturbance_cmd, Nx_act=12) )
     plt.colorbar()
+    plt.title( f'initial Kolmogorov aberration to apply to DM (rms = {round(np.std(disturbance_cmd),3)})')
     plt.show()
+
 
 # ====== PID
 
-
-Kp, Ki, Kd = 1.3,0.5,0
 dt = 1/fps
+Ku = 1.2 # ultimate gain to see stable oscillation in output 
+Tu = 2*dt # period of oscillations 
+#apply Ziegler-Nicols methold of PI controller https://en.wikipedia.org/wiki/Ziegler%E2%80%93Nichols_method
+Kp, Ki, Kd = 0.45 * Ku * zonal_gains, 0.54*Ku/Tu * zonal_gains**3, 0.* np.ones(len(flat_dm_cmd))
+# NOTE: for Ki we scale zonal_gains**3 to avoid run-away amplitification of zonal modes on edge of illuminated DM 
 
-# notatio from PID wikipedia section "Discrete implementation". https://en.wikipedia.org/wiki/Proportional–integral–derivative_controller
-A0 = Kp + Ki*dt + Kd/dt
-A1 = -Kp - 2*Kd/dt
-A2 = Kd/dt
+
+M2C = np.eye(len(flat_dm_cmd)) # mode to DM cmd matrix. For now we just consider poke modes so this matrix is the identity. But later we can consider Zernike or KL modes etc 
 
 
 # ======= Close loop
 # init lists to hold data from control loop
+DIST_list = [ disturbance_cmd ]
 IMG_list = [ ]
 DELTA_list = [ ] #list( np.nan * np.zeros( int( (cp_x2 - cp_x1) * (cp_y2 - cp_y1) ) ) ) ]
-RECO_list = [ ] #list( np.nan * flat_dm_cmd ) ]
+MODE_ERR_list = [ ] #list( np.nan * flat_dm_cmd ) ]
+MODE_ERR_PID_list = [ ]
+CMD_ERR_list = [ list( np.zeros(len(flat_dm_cmd ))) ]
 CMD_list = [ list( flat_dm_cmd ) ]
-CMDERR_list = [ list( np.zeros(len(flat_dm_cmd ))) ]
 ERR_list = [ np.zeros(len(flat_dm_cmd )) ]# list( np.nan * np.zeros( int( (cp_x2 - cp_x1) * (cp_y2 - cp_y1) ) ) ) ]  # length depends on cropped pupil when flattened
-RMS_list = [np.std( disturbance_cmd )] # to hold std( cmd - aber ) for each iteration
+RMS_list = [np.std( cmd_region_filt * disturbance_cmd )] # to hold std( cmd - aber ) for each iteration
  
 dm.send_data( flat_dm_cmd + disturbance_cmd )
 time.sleep(1)
 FliSdk_V2.Start(camera)    
 time.sleep(1)
-for i in range(100):
+for i in range(500):
 
     # get new image and store it (save pupil and psf differently)
     IMG_list.append( list( np.median( bdf.get_raw_images(camera, number_of_frames=number_images_recorded_per_cmd, cropping_corners=cropping_corners) , axis=0)  ) )
@@ -230,29 +225,36 @@ for i in range(100):
     DELTA_list.append( delta.reshape(-1) )
     # CHECKS np.array(ERR_list[0]).shape = np.array(ERR_list[1]).shape = (cp_x2 - cp_x1) * (cp_y2 - cp_y1)
 
-    # reconstruct phase
-    #reco_modal_amps = CM.T @ RES_list[-1]  # CM.T @ (  1/Nph_obj * (sig_turb.signal - Nph_obj/Nph_cal * sig_cal_on.signal) ).reshape(-1)
-    reco = list( CM.T @ DELTA_list[-1] )
+    mode_errs = list( CM.T @ DELTA_list[-1] )
     #reco_shift = reco[1:] + [np.median(reco)] # DONT KNOW WHY WE NEED THIS SHIFT!!!! ???
     #RECO_list.append( list( CM.T @ RES_list[-1] ) ) # reconstructed modal amplitudes
-    RECO_list.append( reco )
+    MODE_ERR_list.append( mode_errs )
+    
+    # apply our PID on the modal basis 
+    u =  Kp * np.array(MODE_ERR_list[-1]) +  Ki * dt * np.sum( MODE_ERR_list,axis=0 ) # PID 
    
+    MODE_ERR_PID_list.append( u )   
     # to get error signal we apply modal gains
-    ERR_list.append( list( np.sum( np.array([ g * a * B for g,a,B in  zip(modal_gains, RECO_list[-1], modal_basis)]) , axis=0) ) )
+    cmd_errs =  M2C @ MODE_ERR_PID_list[-1] #np.sum( np.array([ a * B for a,B in  zip( MODE_ERR_list[-1], modal_basis)]) , axis=0) # this could be matrix multiplication too
+    cmd_errs -= np.mean(cmd_errs) # REMOVE PISTON FORCEFULLY
+    CMD_ERR_list.append( list(cmd_errs) )
 
-   
-    cmderr =  A0 * np.array(ERR_list[-1]) + A1 * np.array(ERR_list[-2]) + A2 * np.array(ERR_list[-2])
+    #list( np.sum( np.array([ Kp * a * B + Ki * dt * sum(err, axis) for g,a,B in  zip(modal_gains, RECO_list[-1], modal_basis)]) , axis=0) 
 
-    cmderr -= np.mean(cmderr) # REMOVE PISTON FORCEFULLY
-   
-    CMDERR_list.append( cmderr )
-   
-    CMD_list.append( CMD_list[-1] - cmderr ) # update the previous command with our cmd error
+    CMD_list.append( flat_dm_cmd - CMD_ERR_list[-1] ) # update the previous command with our cmd error
+    """
+    # roll phase screen 
+    for skip in range(rows_to_jump):
+        scrn.add_row() 
+    # get our new Kolmogorov disturbance command 
+    disturbance_cmd = bdf.create_phase_screen_cmd_for_DM(scrn=scrn, DM=dm, flat_reference=flat_dm_cmd, scaling_factor = scrn_scaling_factor, drop_indicies = corner_indicies, plot_cmd=False)
+    """
+    DIST_list.append( disturbance_cmd )
+    # we only calculate rms in our cmd region
+    RMS_list.append( np.std( cmd_region_filt * ( np.array(CMD_list[-1]) - flat_dm_cmd + np.array(disturbance_cmd) ) ) )
    
     dm.send_data( CMD_list[-1] + disturbance_cmd )
-   
-    RMS_list.append( np.std( np.array(CMD_list[-1]) - flat_dm_cmd + np.array(disturbance_cmd) ) )
-   
+
     time.sleep(0.01)
 
 dm.send_data(flat_dm_cmd)
@@ -265,7 +267,7 @@ plt.ylabel('RMSE cmd space [nm RMS]')
 
 
 # first 5 iterations 
-iterations2plot = [0,1,2,3,4,5]
+iterations2plot = [0,1,2,3,4,5,-2,-1]
 fig, ax = plt.subplots( len(iterations2plot), 5 ,figsize=(10,15))
 ax[0,1].set_title('disturbance',fontsize=15)
 ax[0,0].set_title('ZWFS image',fontsize=15)
@@ -274,22 +276,23 @@ ax[0,3].set_title('DM CMD (feedback)',fontsize=15)
 ax[0,4].set_title('RESIDUAL (feedback)',fontsize=15)
 for i,idx in enumerate(iterations2plot):
     ax[i,0].imshow( np.array(IMG_list)[idx][cp_x1:cp_x2,cp_y1:cp_y2] ) 
-    im1 = ax[i,1].imshow( bdf.get_DM_command_in_2D(disturbance_cmd) )
+    im1 = ax[i,1].imshow( bdf.get_DM_command_in_2D(DIST_list[idx]) )
     plt.colorbar(im1, ax= ax[i,1])
-    im2 = ax[i,2].imshow( bdf.get_DM_command_in_2D(CMDERR_list[idx]) )
+    im2 = ax[i,2].imshow( bdf.get_DM_command_in_2D(CMD_ERR_list[idx]) )
     plt.colorbar(im2, ax= ax[i,2])
     im3 = ax[i,3].imshow( bdf.get_DM_command_in_2D(CMD_list[idx] ) )
     plt.colorbar(im3, ax= ax[i,3])
-    im4 = ax[i,4].imshow( bdf.get_DM_command_in_2D(CMD_list[idx] + disturbance_cmd - flat_dm_cmd) )
+    im4 = ax[i,4].imshow( bdf.get_DM_command_in_2D(np.array(CMD_list[idx]) + np.array(DIST_list[idx]) - flat_dm_cmd) )
     plt.colorbar(im4, ax= ax[i,4])
 
 plt.show() 
+
 
 # compare cmd err to measured CM noise floor
 plt.figure() 
 plt.ylabel('abs cmd err')
 for i ,idx in enumerate(iterations2plot):
-    plt.plot( abs(np.array(CMDERR_list[idx])) , alpha=0.5,color='r')
+    plt.plot( abs(np.array(CMD_ERR_list[idx])) , alpha=0.5,color='r')
 plt.axhline( CM_noise , color='k',label='CM noise floor')
 plt.show()
 
@@ -320,15 +323,14 @@ plt.show()
 
 
 
-
-
 # saving 
-camera_info_dict = bdf.get_camera_info( camera )
+static_ab_performance_fits = fits.HDUList( [] )
 
+camera_info_dict = bdf.get_camera_info( camera )
 
 IMG_fits = fits.PrimaryHDU( IMG_list )
 IMG_fits.header.set('EXTNAME','IMAGES')
-IMG_fits.header.set('recon_fname',recon_file.split('/')[-1])
+#IMG_fits.header.set('recon_fname',recon_file.split('/')[-1])
 for k,v in camera_info_dict.items(): 
     IMG_fits.header.set(k,v)   # add in some fits headers about the camera 
 
@@ -338,36 +340,54 @@ for i,n in zip([ci_x1,ci_x2,ci_y1,ci_y2],['ci_x1','ci_x2','ci_y1','ci_y2']):
 for i,n in zip([cp_x1,cp_x2,cp_y1,cp_y2],['cp_x1','cp_x2','cp_y1','cp_y2']):
     IMG_fits.header.set(n,i)
 
-CMD_fits = fits.PrimaryHDU( CMD_list )
-CMD_fits.header.set('EXTNAME','CMDS')
-CMD_fits.header.set('WHAT_IS','DM commands')
+disturbfits = fits.PrimaryHDU( DIST_list )
+disturbfits.header.set('EXTNAME','DIST')
+disturbfits.header.set('WHAT_IS','disturbance DM command')
 
-RES_fits = fits.PrimaryHDU( RES_list )
+CM_fits = fits.PrimaryHDU( CM )
+CM_fits.header.set('EXTNAME','CM')
+CM_fits.header.set('WHAT_IS','control matrix (filtered)')
+
+IM_fits = fits.PrimaryHDU( CM )
+IM_fits.header.set('EXTNAME','IM')
+IM_fits.header.set('WHAT_IS','unfiltered interaction matrix')
+
+IM_fits = fits.PrimaryHDU( [list(Kp), list(Ki), list(Kd)] )
+IM_fits.header.set('EXTNAME','PID_GAINS')
+IM_fits.header.set('WHAT_IS','Kp,Ki,Kd (columns) for each mode (rows)')
+
+RES_fits = fits.PrimaryHDU( DELTA_list )
 RES_fits.header.set('EXTNAME','RES')
 RES_fits.header.set('WHAT_IS','(I_t - I_CAL_FPM_ON) / I_CAL_FPM_OFF')
 
-RECO_fits = fits.PrimaryHDU( RECO_list )
-RECO_fits.header.set('EXTNAME','RECOS')
-RECO_fits.header.set('WHAT_IS','CM @ ERR')
+MODE_ERR_fits = fits.PrimaryHDU( MODE_ERR_list )
+MODE_ERR_fits.header.set('EXTNAME','MODE_ERR')
+MODE_ERR_fits.header.set('WHAT_IS','CM @ ERR')
 
-ERR_fits = fits.PrimaryHDU( ERR_list )
-ERR_fits.header.set('EXTNAME','ERRS')
-ERR_fits.header.set('WHAT_IS','list of modal errors to feed to PID')
+MODE_ERRPID_fits = fits.PrimaryHDU( MODE_ERR_PID_list )
+MODE_ERRPID_fits.header.set('EXTNAME','MODE_ERR_PID')
+MODE_ERRPID_fits.header.set('WHAT_IS','PID applied to modal errors')
+
+CMDERR_fits = fits.PrimaryHDU( CMD_ERR_list )
+CMDERR_fits.header.set('EXTNAME','CMD_ERR')
+CMDERR_fits.header.set('WHAT_IS','list of cmd errors')
+
+CMD_fits = fits.PrimaryHDU( CMD_list )
+CMD_fits.header.set('EXTNAME','CMDS')
+CMD_fits.header.set('WHAT_IS','DM commands')
 
 RMS_fits = fits.PrimaryHDU( RMS_list )
 RMS_fits.header.set('EXTNAME','RMS')
 RMS_fits.header.set('WHAT_IS','std( cmd - aber_in_cmd_space )')
 
 # add these all as fits extensions 
-for f in [disturbfits, IMfits, CMfits, IMG_fits, RES_fits, RECO_fits, ERR_fits, CMD_fits, RMS_fits ]: #[Ufits, Sfits, Vtfits, CMfits, disturbfits, IMG_fits, ERR_fits, RECO_fits, CMD_fits, RMS_fits ]:
+for f in [disturbfits, IM_fits, CM_fits, IMG_fits, RES_fits, MODE_ERR_fits, MODE_ERRPID_fits,CMDERR_fits, CMD_fits, RMS_fits ]: #[Ufits, Sfits, Vtfits, CMfits, disturbfits, IMG_fits, ERR_fits, RECO_fits, CMD_fits, RMS_fits ]:
     static_ab_performance_fits.append( f ) 
 
 #save data! 
-#save_fits = data_path + f'A_FIRST_closed_loop_on_static_aberration_PID-{PID}_t-{tstamp}.fits'
-#static_ab_performance_fits.writeto( save_fits )
+save_fits = data_path + f'A_FIRST_closed_loop_on_static_aberration_t-{tstamp}.fits'
+static_ab_performance_fits.writeto( save_fits )
 
-
-data = static_ab_performance_fits
 
 
 

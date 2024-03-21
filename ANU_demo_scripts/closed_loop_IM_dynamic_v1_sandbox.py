@@ -125,7 +125,7 @@ if plot_all: #plotting DM eigenmodes to see which to filter
     plt.show()
 
 #S_filt = S > S[ np.min( np.where( abs(np.diff(S)) < 1e-2 )[0] ) ]
-S_filt = S > S[ 20 ]
+S_filt = S > S[30] #S[ 20 ]
 #S_filt[0] = False # FILTER FIRST MODE !!!!
 Sigma = np.zeros( np.array(IM).shape, float)
 np.fill_diagonal(Sigma, 1/IM_pokeamp * S[S_filt], wrap=False) #
@@ -195,7 +195,10 @@ if plot_all:
 
 
 # ======= init disturbance
-scrn_scaling_factor = 0.2
+
+#kernel = np.array([[-1., -1., -1.],[-1.,  8., -1.],[-1., -1., -1.]])
+
+scrn_scaling_factor = 0.23
 # --- create infinite phasescreen from aotools module 
 Nx_act = dm.num_actuators_width()
 screen_pixels = Nx_act*2**5 # some multiple of numer of actuators across DM 
@@ -205,8 +208,12 @@ scrn = aotools.infinitephasescreen.PhaseScreenVonKarman(nx_size=screen_pixels, p
 corner_indicies = [0, Nx_act-1, Nx_act * (Nx_act-1), -1] # Beware -1 index doesn't work if inserting in list! This is  ok for for use with create_phase_screen_cmd_for_DM function.
 
 disturbance_cmd = cmd_region_filt * bdf.create_phase_screen_cmd_for_DM(scrn=scrn, DM=dm, flat_reference=flat_dm_cmd, scaling_factor = scrn_scaling_factor, drop_indicies = corner_indicies, plot_cmd=False)  # normalized flat_dm +- scaling_factor?
+ 
+disturbance_cmd -= cmd_region_filt *np.mean( disturbance_cmd ) # no piston!! 
+#disturbance_cmd -= cmd_region_filt * 0.8*np.min( disturbance_cmd ) # can be used to bias it negatively where we have better linearity in our WFS, or higher non-linearity, whatever you want to show. 
 
-disturbance_cmd -= np.mean( disturbance_cmd ) # no piston!! 
+#HPF_dist = ndimage.convolve(bdf.get_DM_command_in_2D(disturbance_cmd), kernel).reshape(-1)
+#disturbance_cmd_HPF = HPF_dist[np.isfinite( HPF_dist ) ]
 
 rows_to_jump = 1 # how many rows to jump on initial phase screen for each Baldr loop
 
@@ -228,7 +235,7 @@ if plot_all:
 
 dt = 1/fps
 Ku = 1.9 #1.5 # ultimate gain to see stable oscillation in output 
-Tu = 3 *dt # period of oscillations 
+Tu = 3 * dt # period of oscillations 
 #apply Ziegler-Nicols methold of PI controller https://en.wikipedia.org/wiki/Ziegler%E2%80%93Nichols_method
 #Kp, Ki, Kd = 0.45*Ku * zonal_gains, 0.54*Ku/Tu * zonal_gains, 0.* np.ones(len(flat_dm_cmd))
 Kp, Ki, Kd = 0.45*Ku * cmd_region_filt , 0.54*Ku/Tu *cmd_region_filt, 0.* np.ones(len(flat_dm_cmd))
@@ -288,8 +295,10 @@ for i in range(500):
         scrn.add_row() 
     # get our new Kolmogorov disturbance command 
     disturbance_cmd = cmd_region_filt * bdf.create_phase_screen_cmd_for_DM(scrn=scrn, DM=dm, flat_reference=flat_dm_cmd, scaling_factor = scrn_scaling_factor, drop_indicies = corner_indicies, plot_cmd=False)
-    disturbance_cmd -= np.mean( disturbance_cmd )
     
+    disturbance_cmd -= cmd_region_filt * np.mean( disturbance_cmd )
+    #disturbance_cmd -= cmd_region_filt * 0.8*np.min( disturbance_cmd ) can be used to bias into non-linear/linear regime
+
     DIST_list.append( disturbance_cmd )
     # we only calculate rms in our cmd region
     RMS_list.append( np.std( cmd_region_filt * ( np.array(CMD_list[-1]) - flat_dm_cmd + np.array(disturbance_cmd) ) ) )
@@ -303,8 +312,9 @@ dm.send_data(flat_dm_cmd)
 
 #RMSE
 plt.figure()
-plt.plot( 2 * interp_deflection_4x4act( RMS_list ),'.',label='residual' )
-plt.plot( 2 * interp_deflection_4x4act( [np.std(d) for d in DIST_list]) ,'.',label='disturbance' )
+plt.plot( 2 * interp_deflection_4x4act( [np.std(d) for d in DIST_list]) ,'.',label='disturbance' ,alpha=0.5)
+plt.plot( 2 * interp_deflection_4x4act( RMS_list ),'.',label='residual',alpha=0.5 )
+
 plt.ylabel('RMSE wave space [nm RMS]')
 plt.xlabel('iteration')
 plt.legend()
@@ -438,7 +448,7 @@ for f in [disturbfits, IM_fits, CM_fits, IMG_fits, RES_fits, MODE_ERR_fits, MODE
     static_ab_performance_fits.append( f ) 
 
 #save data! 
-save_fits = data_path + f'A_FIRST_closed_loop_on_dynamic_aberration_t-{tstamp}.fits'
+save_fits = data_path + f'closed_loop_on_dynamic_aberration_EXAMPLE_DYNAMIC_RANGE_t-{tstamp}.fits'
 static_ab_performance_fits.writeto( save_fits )
 
 
