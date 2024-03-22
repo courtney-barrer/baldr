@@ -401,7 +401,7 @@ CM_fits = fits.PrimaryHDU( CM )
 CM_fits.header.set('EXTNAME','CM')
 CM_fits.header.set('WHAT_IS','control matrix (filtered)')
 
-IM_fits = fits.PrimaryHDU( CM )
+IM_fits = fits.PrimaryHDU( IM )
 IM_fits.header.set('EXTNAME','IM')
 IM_fits.header.set('WHAT_IS','unfiltered interaction matrix')
 
