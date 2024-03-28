@@ -171,8 +171,8 @@ if __name__ == "__main__":
     P2C = get_P2C(dm, camera, dm_cmd_space_filter,  im_ref, im_poke_matrix , subwindow_pixels=3, debug = True)
 
     # create a disturbance DM command 
-    delta_c = np.zeros(140) #no aberration 
-    delta_c[62] = 0.1 # add aberration to one actuator
+    delta_c = 0.05*np.random.randn(140) #np.zeros(140) #no aberration 
+    #delta_c[62] = 0.1 # add aberration to one actuator
     current_dm_cmd = delta_c + flat_dm_cmd  # create absolute command
  
     # define our +/- dither commands 
@@ -181,8 +181,26 @@ if __name__ == "__main__":
     #estimate our non-linear flags
     nonlinear_flags = detect_if_nonlinear_regime( current_dm_cmd, dither_cmd, P2C , cropping_corners=cropping_corners, subregion_corners=pupil_corners)
 
+    #get the image 
+    pupil_image = apply_dm_cmd_and_get_im(dm, camera, current_dm_cmd, number_of_frames = 5, cropping_corners=cropping_corners, subregion_corners=pupil_corners)
+   
+    # 
+    pupil_registration = P2C @ pupil_image.reshape(-1)
+
     plt.figure()
     plt.plot( nonlinear_flags, 'x' ); plt.plot( delta_c/np.max(abs(delta_c) ) ) ; plt.show()
+
+    filt_nl = ( pupil_registration > 0 ) & (nonlinear_flags>0) # non-linear filt
+    filt_l = ( pupil_registration > 0 ) & (nonlinear_flags<1) #linear filt 
+plt.figure()
+plt.plot( delta_c[filt_l]*3500 ,pupil_registration[filt_l] ,'.',label='linear classified')
+plt.plot( delta_c[filt_nl]*3500 ,pupil_registration[filt_nl] ,'.', label='non-linear classified')
+plt.legend()
+plt.xlabel( 'aberration OPD [nm]')
+plt.ylabel( 'intensity [adu]' ) 
+plt.tight_layout()
+plt.savefig(data_path + 'non-linearity_estimator.png',dpi=300) 
+    plt.show()
 
 
 
