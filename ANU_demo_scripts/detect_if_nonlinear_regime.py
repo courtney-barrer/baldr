@@ -192,14 +192,14 @@ if __name__ == "__main__":
 
     filt_nl = ( pupil_registration > 0 ) & (nonlinear_flags>0) # non-linear filt
     filt_l = ( pupil_registration > 0 ) & (nonlinear_flags<1) #linear filt 
-plt.figure()
-plt.plot( delta_c[filt_l]*3500 ,pupil_registration[filt_l] ,'.',label='linear classified')
-plt.plot( delta_c[filt_nl]*3500 ,pupil_registration[filt_nl] ,'.', label='non-linear classified')
-plt.legend()
-plt.xlabel( 'aberration OPD [nm]')
-plt.ylabel( 'intensity [adu]' ) 
-plt.tight_layout()
-plt.savefig(data_path + 'non-linearity_estimator.png',dpi=300) 
+    plt.figure()
+    plt.plot( delta_c[filt_l]*3500 ,pupil_registration[filt_l] ,'.',label='linear classified')
+    plt.plot( delta_c[filt_nl]*3500 ,pupil_registration[filt_nl] ,'.', label='non-linear classified')
+    plt.legend()
+    plt.xlabel( 'aberration OPD [nm]')
+    plt.ylabel( 'intensity [adu]' ) 
+    plt.tight_layout()
+    plt.savefig(data_path + 'non-linearity_estimator.png',dpi=300) 
     plt.show()
 
 
