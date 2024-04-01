@@ -1,4 +1,15 @@
 import numpy as np
+import pandas as pd 
+import os 
+import time 
+import matplotlib.pyplot as plt 
+root_path = '/home/baldr/Documents/baldr'
+data_path = root_path + '/ANU_demo_scripts/ANU_data/'
+fig_path = root_path + '/figures/'
+
+os.chdir(root_path)
+from functions import baldr_demo_functions as bdf
+
 
 def apply_dm_cmd_and_get_im(dm, camera, cmd, number_of_frames = 5, cropping_corners=None, subregion_corners=None): 
 
@@ -139,6 +150,8 @@ if __name__ == "__main__":
     # flat DM 
     flat_dm_cmd = pd.read_csv(bdf.path_to_dm_flat_map, header=None)[0].values 
 
+    # DM gain
+    cmd2nm = 3500  #nm/DM cmd 
     # checkers pattern on DM 
     waffle_dm_cmd = pd.read_csv(root_path + '/DMShapes/dm_checker_pattern.csv', index_col=[0]).values.ravel() 
 
@@ -169,15 +182,19 @@ if __name__ == "__main__":
 
     # create our pixel to command registration matrix 
     P2C = get_P2C(dm, camera, dm_cmd_space_filter,  im_ref, im_poke_matrix , subwindow_pixels=3, debug = True)
-
+    """ 
+    #SINGLE ITERATION FOR EACH ACTUATOR 
+    #to detect which ones are non-linear with random initialization of position and waffle amplitde
+    
     # create a disturbance DM command 
     delta_c = 0.05*np.random.randn(140) #np.zeros(140) #no aberration 
     #delta_c[62] = 0.1 # add aberration to one actuator
     current_dm_cmd = delta_c + flat_dm_cmd  # create absolute command
- 
+     
     # define our +/- dither commands 
     dither_cmd = 0.02 * waffle_dm_cmd 
     
+
     #estimate our non-linear flags
     nonlinear_flags = detect_if_nonlinear_regime( current_dm_cmd, dither_cmd, P2C , cropping_corners=cropping_corners, subregion_corners=pupil_corners)
 
@@ -186,21 +203,115 @@ if __name__ == "__main__":
    
     # 
     pupil_registration = P2C @ pupil_image.reshape(-1)
+    """
+    
+   
+    pupil_registration_list = []
+    delta_c_list = []
+    nonlinear_flag_list = []
+    delta_c = np.zeros(140) # init our delta_c to zeros 
+    act_idx = 65
+    for it in range(300):
+        delta_c[act_idx] = 0.07*np.random.randn()
+     
+        current_dm_cmd = delta_c + flat_dm_cmd  # create absolute command
 
-    plt.figure()
-    plt.plot( nonlinear_flags, 'x' ); plt.plot( delta_c/np.max(abs(delta_c) ) ) ; plt.show()
+        dither_cmd = 0.02 * waffle_dm_cmd 
 
-    filt_nl = ( pupil_registration > 0 ) & (nonlinear_flags>0) # non-linear filt
-    filt_l = ( pupil_registration > 0 ) & (nonlinear_flags<1) #linear filt 
-    plt.figure()
-    plt.plot( delta_c[filt_l]*3500 ,pupil_registration[filt_l] ,'.',label='linear classified')
-    plt.plot( delta_c[filt_nl]*3500 ,pupil_registration[filt_nl] ,'.', label='non-linear classified')
-    plt.legend()
-    plt.xlabel( 'aberration OPD [nm]')
-    plt.ylabel( 'intensity [adu]' ) 
-    plt.tight_layout()
-    plt.savefig(data_path + 'non-linearity_estimator.png',dpi=300) 
-    plt.show()
+        nonlinear_flags = detect_if_nonlinear_regime( current_dm_cmd, dither_cmd, P2C , cropping_corners=cropping_corners, subregion_corners=pupil_corners)
+
+        pupil_image = apply_dm_cmd_and_get_im(dm, camera, current_dm_cmd, number_of_frames = 5, cropping_corners=cropping_corners, subregion_corners=pupil_corners)
+   
+        # 
+        pupil_registration = P2C @ pupil_image.reshape(-1)
+        
+        pupil_registration_list.append( pupil_registration[act_idx] )
+        nonlinear_flag_list.append( nonlinear_flags[act_idx] )
+        delta_c_list.append( delta_c[act_idx] )
+    
+    pupil_registration_f = np.array(pupil_registration_list).ravel()
+
+    #normalize between 0-1
+    pupil_registration_f = (np.array(pupil_registration_list).ravel() - np.min( np.array(pupil_registration_list).ravel() ) ) / ( np.max( np.array(pupil_registration_list).ravel() ) -np.min( np.array(pupil_registration_list).ravel() ) )
+
+    nonlinear_flags_f = np.array(nonlinear_flag_list).ravel()
+    delta_c_f = np.array(delta_c_list).ravel()
+
+    
+
+if 1: 
+    # ============= PLOTTING 
+    zero_point_intensity=0.15
+    fig = plt.figure(figsize=(10, 10))
+    gs = fig.add_gridspec(2, 2,  width_ratios=(4, 1), height_ratios=(1, 4),
+                      left=0.1, right=0.9, bottom=0.1, top=0.9,
+                      wspace=0.05, hspace=0.05)
+    # Create the Axes.
+    #ax0 = fig.add_subplot(gs[0, 1])
+
+    ax = fig.add_subplot(gs[1, 0])
+    ax_histx = fig.add_subplot(gs[0, 0], sharex=ax)
+    ax_histy = fig.add_subplot(gs[1, 1], sharey=ax)
+
+
+    #P = 100 * 0.8*np.random.randn(1000)
+    #v = 1+1*np.cos(P/100 +2.2)
+
+    #filt = P > 100
+    filt_l =  ((nonlinear_flags_f>0) & (pupil_registration_f < zero_point_intensity)) |  (( pupil_registration_f > 0. ) & (nonlinear_flags_f<1)) # linear filt
+    filt_nl = ( pupil_registration_f >= zero_point_intensity ) & (nonlinear_flags_f>0) # non-linear filt
+    #filt_l = ( pupil_registration > 0 ) & (nonlinear_flags<1) #linear filt 
+    ylim = [-0.5 , 1]
+    xlim = [cmd2nm*1.2*np.min(delta_c_f), cmd2nm*1.2*np.max(delta_c_f)]
+    color='Grey'
+
+    ax_histx.tick_params(axis="x", labelbottom=False)
+    ax_histy.tick_params(axis="y", labelleft=False)
+
+    sc=ax.plot(cmd2nm*delta_c_f[filt_nl],pupil_registration_f[filt_nl],'.',alpha=0.6,color='orange',label='phase wrap detection')
+    sc=ax.plot(cmd2nm*delta_c_f[filt_l],pupil_registration_f[filt_l],'.',alpha=0.6,color=color)
+
+    xbins = np.linspace(xlim[0],  xlim[1], 30)
+    ybins = np.linspace(ylim[0] , ylim[1], 30)    
+
+    ax_histx.hist(cmd2nm*delta_c_f[filt_l], bins=xbins, color=color)
+    ax_histx.hist(cmd2nm*delta_c_f[filt_nl], bins=xbins, color='orange')
+
+    ax_histy.hist(pupil_registration_f[filt_l], bins=ybins, color=color, orientation='horizontal')
+    ax_histy.hist(pupil_registration_f[filt_nl], bins=ybins, color='orange', orientation='horizontal')
+
+    ax_histx.set_yticks([])
+    ax_histy.set_xticks([])
+    #ax.set_ylim(ylim)
+    #ax.set_xlim(xlim)
+
+    ax.axvline(0,color='k',linestyle='--',label='zero aberration')
+    ax.axhline(zero_point_intensity,color='k',linestyle=':',label='zero point intensity')
+    ax_histx.axvline(0,color='k',linestyle=':')
+
+    ax.set_xlabel('OPD [nm]',fontsize=25)
+    ax.set_ylabel('ZWFS Pixel Intensity\n(normalized)' , fontsize=25)
+    ax.tick_params(labelsize=25)
+    ax.legend(fontsize=18)
+
+
+    #ax0.imshow( bdf.get_DM_command_in_2D(delta_c) ,cmap='Greys')
+    #ax0.set_xticks(np.arange(-.5, 10, 1), minor=True)
+    #ax0.set_yticks(np.arange(-.5, 10, 1), minor=True)
+    #ax0.grid(which='minor', color='k', linestyle='-', linewidth=1)
+    #ax0.tick_params(which='minor', bottom=False, left=False)
+    #ax0.axis('off')
+    #ax0.set_title('DM',fontsize=18)
+    #ax0.set_xticks([])
+    #ax0.set_yticks([])
+
+
+    ax_histx.tick_params(labelsize=25)
+    ax_histy.tick_params(labelsize=25)
+
+    #plt.tight_layout()
+    fig.savefig( data_path + 'non-linearity_estimator.png',dpi=300 , bbox_inches="tight") 
+
 
 
 
