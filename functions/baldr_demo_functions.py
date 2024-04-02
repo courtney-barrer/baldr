@@ -577,42 +577,77 @@ def detect_pupil_and_PSF_region(camera, fps = 600 , plot_results = True, croppin
 
 
 
-def construct_command_basis(DM , basis='Zernike', number_of_modes = 20, actuators_across_diam = 'full',flat_map=None):
+
+
+def shift(xs, n, m, fill_value=np.nan):
+    # shifts a 2D array xs by n rows, m columns and fills the new region with fill_value
+
+    e = xs.copy()
+    if n!=0:
+        if n >= 0:
+            e[:n,:] = fill_value
+            e[n:,:] =  e[:-n,:]
+        else:
+            e[n:,:] = fill_value
+            e[:n,:] =  e[-n:,:]
     
-    Nx_act = DM.num_actuators_width() # number of actuators across diameter of DM.
-    
+        
+    if m!=0:
+        if m >= 0:
+            e[:,:m] = fill_value
+            e[:,m:] =  e[:,:-m]
+        else:
+            e[:,m:] = fill_value
+            e[:,:m] =  e[:,-m:]
+    return e
+
+
+
+def construct_command_basis( basis='Zernike', number_of_modes = 20, Nx_act_DM = 12, Nx_act_basis = 12, act_offset=(0,0)):
+    """
+    returns a change of basis matrix M2C to go from modes to DM commands, where columns are the DM command for a given modal basis. e.g. M2C @ [0,1,0,...] would return the DM command for tip on a Zernike basis. Modes are normalized on command space such that <M>=0, <M|M>=1. Therefore these should be added to a flat DM reference if being applied.     
+
+    basis = string of basis to use
+    number_of_modes = int, number of modes to create
+    Nx_act_DM = int, number of actuators across DM diameter 
+    Nx_act_basis = int, number of actuators across the active basis diameter 
+    act_offset = tuple, (actuator row offset, actuator column offset) to offset the basis on DM (i.e. we can have a non-centered basis)
+     
+    """
+    # shorter notations 
+    #Nx_act = DM.num_actuators_width() # number of actuators across diameter of DM.
+    #Nx_act_basis = actuators_across_diam
+    c = act_offset
+    # DM BMC-3.5 is 12x12 missing corners so 140 actuators , we note down corner indicies of flattened 12x12 array. 
+    corner_indices = [0, Nx_act_DM-1, Nx_act_DM * (Nx_act_DM-1), -1] 
+
+    bmcdm_basis_list = []
     # to deal with
     if basis == 'Zernike':
-        if actuators_across_diam == 'full':
-            # NOTE WE DO PUPIL OVER 4 MORE PIXELS TO FILL SQUARE LIKE DM AND CROP ACCORDINGLY - THIS FITS NICELY THE MULTI-3.5-BMC DM SHAPE
-            raw_basis = zernike.zernike_basis(nterms=number_of_modes, npix=Nx_act + 4 )
-        
-            bmcdm_basis_list = []
-            for i,b in enumerate(raw_basis):
+        raw_basis = zernike.zernike_basis(nterms=number_of_modes, npix=Nx_act_basis )
+        for i,B in enumerate(raw_basis):
+            # normalize <B|B>=1, <B>=0 (so it is an offset from flat DM shape)
+            Bnorm = np.sqrt( 1/np.nansum( B**2 ) ) * B
+            # pad with zeros to fit DM square shape and shift pixels as required to center
+            if np.mod( Nx_act_basis, 2) == 0:
+                pad_width = (Nx_act_DM - B.shape[0] )//2
+                padded_B = shift( np.pad( Bnorm , pad_width , constant_values=(np.nan,)) , c[0], c[1])
+            else: 
+                pad_width = (Nx_act_DM - B.shape[0] )//2 + 1
+                padded_B = shift( np.pad( Bnorm , pad_width , constant_values=(np.nan,)) , c[0], c[1])[:-1,:-1]  # we take off end due to odd numebr 
 
-                m = b[2:-2,2:-2].copy() # we crop to actual DM size 
-                # make mode piston free on pupil basis
-                m -= np.nanmean( m )
-                # normalize mode so that variance = <b|b> = 1 rms in command space ([0,1] bounds)
-                if i!=0: # we dont do piston since we have put piston to zero in first step
-                    m *= 1/np.sqrt(np.nansum(m*m))
-                if (np.nanmax(m)>0.5) or (np.nanmin(m)<-0.5):
-                    print(f'mode {i} rms = {np.nansum(m*m)} but has single actuator commands outside [0,1] range. Specifically \nnp.nanmax(m) ={np.nanmax(m)}\nnp.nanmin(m) ={np.nanmin(m)}')
-                if flat_map == None:
-                    m += 0.5 #center mode at half the actuator range
-                else: 
-                    m += flat_map # center mode at the DM flat map 
-                # drop corner indicies which should be nan values. This automatically flattens the array as needed
-                bmcdm_basis_list.append( m[np.isfinite(m)] ) 
-    
-        else: # specified actuator number across DM
-            raw_basis = zernike.zernike_basis(nterms=number_of_modes, npix=actuators_across_diam)
-            corner_indices = [0, Nx_act-1, Nx_act * (Nx_act-1), -1]
-            raise TypeError('to do - deal with outside circular region')
-        
-        bmcdm_basis_dict = {zernike.zern_name(i+1):b for i,b in enumerate(bmcdm_basis_list)}
 
-    return(bmcdm_basis_dict)
+            flat_B = padded_B.reshape(-1) # flatten basis so we can put it in the accepted DM command format
+            np.nan_to_num(flat_B,0 ) # convert nan -> 0 
+            flat_B[corner_indices] = np.nan # convert DM corners to nan (so lenght flat_B = 140 which corresponds to BMC-3.5 DM)
+
+            # now append our basis function removing corners (nan values)
+            bmcdm_basis_list.append( flat_B[np.isfinite(flat_B)] )
+
+    # our mode 2 command matrix 
+    M2C = np.array( bmcdm_basis_list ).T # take transpose to make columns the modes in command space.
+
+    return(M2C)
 
 
 def get_DM_command_in_2D(cmd,Nx_act=12):
