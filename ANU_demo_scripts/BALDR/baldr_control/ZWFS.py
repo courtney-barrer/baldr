@@ -27,7 +27,7 @@ import pandas as pd
 
 class ZWFS():
     # for now one camera, one DM per object - real system will have 1 camera, 4 DMs!
-    def __init__(self, DM_serial_number, cameraIndex=0, DMshapes_path='/home/baldr/Documents/baldr/DMShapes/' ):
+    def __init__(self, DM_serial_number, cameraIndex=0, DMshapes_path='/home/baldr/Documents/baldr/DMShapes/', pupil_crop_region=[None, None, None, None] ):
        
         # connecting to camera
         camera = FliSdk_V2.Init() # init camera object
@@ -94,13 +94,37 @@ class ZWFS():
 
         self.dm_shapes = shapes_dict
            
-            
-        #self.dm_err_flag = dm_err_flag
-        #self.camera_err_flag = camera_err_flag
-        #self.flat_dm_cmd =  pd.read_csv(DMshapes_path+'17DW019#053_FLAT_MAP_COMMANDS.txt',header=None)[0].values
-        #self.four_torres = 
-        
- 
+        # define our region where we can robustly expect to uniquely find the ZWFS pupil. 
+        # this is placed as an attribute here since from 1 image we will have 4 pupils 
+        # which will control 4 different DMs.
+        # So we need to define where to find each pupil for any given image taken. 
+        if pupil_crop_region == None:
+            self.pupil_crop_region = [None, None, None, None] # no cropping of the image
+        elif hasattr(pupil_crop_region, '__len__'):
+            if len( pupil_crop_region ) == 4:
+                if all(isinstance(x, int) for x in pupil_crop_region):
+                    self.pupil_crop_region = pupil_crop_region
+                else:
+                    self.pupil_crop_region = [None, None, None, None]
+                    print('pupil_crop_region has INVALID entries, it needs to be integers')
+            else:
+                self.pupil_crop_region = [None, None, None, None]
+                print('pupil_crop_region has INVALID length, it needs to have length = 4')
+        else:
+            self.pupil_crop_region = [None, None, None, None]
+            print('pupil_crop_region has INVALID type. Needs to be list of integers of length = 4')
+
+        #define pixel coordinates in this cropped region  
+        r1, r2, c1, c2 = self.pupil_crop_region
+        if self.pupil_crop_region != [None, None, None, None]:
+            self.row_coords = np.linspace( (r1 - r2)/2 , (r2 - r1)/2, r2-r1)  #rows
+            self.col_coords = np.linspace( (c1 - c2)/2 , (c2 - c1)/2, c2-c1)  #columns
+        else: # full image 
+            r1 = 0; c1 = 0
+            c2, r2 = FliSdk_V2.GetCurrentImageDimension(self.camera)
+            self.row_coords = np.linspace( (r1 - r2)/2 , (r2 - r1)/2, r2-r1)  #rows
+            self.col_coords = np.linspace( (c1 - c2)/2 , (c2 - c1)/2, c2-c1)  #columns
+
         # ========== CONTROLLERS
         self.phase_controllers = [] # initiate with no controllers
         self.pupil_controllers = [] # initiate with no controllers

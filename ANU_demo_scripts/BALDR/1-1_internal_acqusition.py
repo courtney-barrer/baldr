@@ -7,7 +7,7 @@ DIT = 2e-3 #s integration time
 pupil_crop_region = [140+21,140+129,90+11,90+119] #crop region around ZWFS pupil [row min, row max, col min, col max] 
 
 #init our ZWFS (object that interacts with camera and DM)
-zwfs = ZWFS.ZWFS(DM_serial_number='17DW019#053', cameraIndex=0, DMshapes_path = '/home/baldr/Documents/baldr/DMShapes/' ) 
+zwfs = ZWFS.ZWFS(DM_serial_number='17DW019#053', cameraIndex=0, DMshapes_path = '/home/baldr/Documents/baldr/DMShapes/', pupil_crop_region=pupil_crop_region ) 
 
 zwfs.set_camera_fps(fps) # set the FPS 
 zwfs.set_camera_dit(DIT) # set the DIT 
@@ -21,7 +21,7 @@ zwfs.start_camera()
 #phase_ctrl = phase_control.phase_contoller_1()
 
 #init our pupil controller (object that processes ZWFS images and outputs VCM commands)
-pupil_ctrl = pupil_control.pupil_controller_1(pupil_crop_region=pupil_crop_region, config_file = None)
+pupil_ctrl = pupil_control.pupil_controller_1(config_file = None)
 
 
 # ========== PROCEEDURES ON INTERNAL SOURCE 
@@ -29,16 +29,17 @@ pupil_ctrl = pupil_control.pupil_controller_1(pupil_crop_region=pupil_crop_regio
 # 1.1) center source on DM 
 pup_err_x, pup_err_y = pupil_ctrl.measure_dm_center_offset( zwfs, debug=True  )
 
-pupil_ctrl.move_pupil_relative( pup_err_x, pup_err_y ) 
+#pupil_ctrl.move_pupil_relative( pup_err_x, pup_err_y ) 
 
 # repeat until within threshold 
 
 # 1.2) analyse pupil and decide if it is ok
-pupil_report = pupil_ctrl.analyse_pupil( zwfs, crop_region , return_report = True)
+pupil_report = pupil_control.analyse_pupil_openloop( zwfs, debug = True, return_report = True)
 
-if pupil_report['pupil_quality_flag'] == 1:
-    pupil_ctrl.set_pupil_reference_pixels( ) #measure and store pupil center pixels 
-    pupil_ctrl.set_pupil_filter( )  # measure and store pixel indicies where the pupil is
+if pupil_report['pupil_quality_flag'] == 1: #where do we append this information to?
+    #FIRST LETS DO OUR build_control_model AND SEE WHAT WE NEED FOR THIS  
+    #pupil_ctrl.set_pupil_reference_pixels( pupil_report ) #measure and store pupil center pixels 
+    #pupil_ctrl.set_pupil_filter( pupil_report )  # measure and store pixel indicies where the pupil is
 else:
     print('implement proceedure X1') 
 
