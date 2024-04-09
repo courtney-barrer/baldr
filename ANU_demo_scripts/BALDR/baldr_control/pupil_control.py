@@ -34,8 +34,7 @@ class pupil_controller_1():
         
         zwfs.states['busy'] = 1
 
-        #rows, columns to crop
-        r1,r2,c1,c2 = zwfs.pupil_crop_region
+        # r1,r2,c1,c2 = zwfs.pupil_crop_region <- this cropping gets done automatically in zwfs.get_image()
 
         # make sure phase mask is in 
 
@@ -51,7 +50,7 @@ class pupil_controller_1():
         time.sleep(0.003)
         img_pull = zwfs.get_image().astype(int) # get_image returns uint16 which cannot be negative
         
-        delta_img = abs( img_push - img_pull )[r1:r2,c1:c2]
+        delta_img = abs( img_push - img_pull ) # [r1:r2,c1:c2] #zwfs.get_image() automatically crops here
 
         #define symetric coordinates in image (i.e. origin is at image center)  
         y = np.arange( -delta_img.shape[0]//2, delta_img.shape[0]//2) # y is row
@@ -112,7 +111,7 @@ def analyse_pupil_openloop( zwfs, debug = True, return_report = True):
 
     # simple idea: we are clearly going to have 2 modes in distribution of pixel intensity, one centered around the mean pupil intensity where illuminated, and another centered around the "out of pupil" region which will be detector noise / scattered light. np.histogram in default setup automatically calculates bins that incoorporate the range and resolution of data. Take the median frequency it returns (which is an intensity value) and set this as the pupil intensity threshold filter. This should be roughly between the two distributions.
 
-    img = zwfs.get_image().astype(int)[r1: r2, c1: c2]
+    img = zwfs.get_image().astype(int) #[r1: r2, c1: c2] <- we made zwfs automatically crop 
     density, intensity_edges  = np.histogram( img.reshape(-1) )
     intensity_threshold =  np.median( intensity_edges )
 
@@ -124,9 +123,9 @@ def analyse_pupil_openloop( zwfs, debug = True, return_report = True):
 
     #================================
     #============= Add to report card 
-    report['pupil_pixel_filter'] = pupil_filter
-    report['pupil_pixels'] = pupil_pixels
-    report['pupil_center_ref_pixels'] = ( x_pupil_center, y_pupil_center ) 
+    report['pupil_pixel_filter'] = pupil_filter # within the cropped img frame based on zwfs.pupil_crop_region
+    report['pupil_pixels'] = pupil_pixels # within the cropped img frame based on zwfs.pupil_crop_region
+    report['pupil_center_ref_pixels'] = ( x_pupil_center, y_pupil_center ) # within the cropped img frame based on zwfs.pupil_crop_region
 
     if debug: 
         fig,ax = plt.subplots(2,1,figsize=(5,10))
@@ -157,7 +156,7 @@ def analyse_pupil_openloop( zwfs, debug = True, return_report = True):
         time.sleep(0.003)
         img_pull = zwfs.get_image().astype(int) # get_image returns uint16 which cannot be negative
         
-        delta_img_list.append( abs( img_push - img_pull )[r1:r2,c1:c2] ) # DEFINE THIS in the crop region
+        delta_img_list.append( abs( img_push - img_pull ) ) # zwfs.get_image automatiicaly crops so this is DEFINED in the crop region
 
     zwfs.send_cmd(zwfs.dm_shapes['flat_dm']) # flat DM 
     delta_img = np.median( delta_img_list, axis = 0 ) #get median of our modulation images 

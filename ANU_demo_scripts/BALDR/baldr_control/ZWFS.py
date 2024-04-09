@@ -103,7 +103,7 @@ class ZWFS():
         elif hasattr(pupil_crop_region, '__len__'):
             if len( pupil_crop_region ) == 4:
                 if all(isinstance(x, int) for x in pupil_crop_region):
-                    self.pupil_crop_region = pupil_crop_region
+                    self.pupil_crop_region = pupil_crop_region  # [row1 , row2, col1 , col2]
                 else:
                     self.pupil_crop_region = [None, None, None, None]
                     print('pupil_crop_region has INVALID entries, it needs to be integers')
@@ -124,6 +124,18 @@ class ZWFS():
             c2, r2 = FliSdk_V2.GetCurrentImageDimension(self.camera)
             self.row_coords = np.linspace( (r1 - r2)/2 , (r2 - r1)/2, r2-r1)  #rows
             self.col_coords = np.linspace( (c1 - c2)/2 , (c2 - c1)/2, c2-c1)  #columns
+
+        # ========== initiate info on reference regions that controllers will need to work.
+        """
+        # this can be updated later after DM, pupil centering, for example using: 
+        report = pupil_control.analyse_pupil_openloop( zwfs, debug = True, return_report = True) 
+        as input to zwfs.update_reference_regions_in_img( report ).
+        This has to be updated before any controller can be applied!
+        """
+        self.pupil_pixel_filter = [np.nan]
+        self.pupil_pixels = [np.nan]
+        self.pupil_center_ref_pixels = (np.nan, np.nan) 
+        self.dm_center_ref_pixels = (np.nan, np.nan) 
 
         # ========== CONTROLLERS
         self.phase_controllers = [] # initiate with no controllers
@@ -146,6 +158,7 @@ class ZWFS():
         self.states['sky'] = 0 # 1 if we are on a sky (background), 0 otherwise
         self.states['fpm'] = 0 # 0 for focal plance mask out, positive number for in depending on which one)
         self.states['busy'] = 0 # 1 if the ZWFS is doing something
+        # etc 
        
     def send_cmd(self, cmd):
        
@@ -167,8 +180,10 @@ class ZWFS():
     def get_image(self):
         # I do not check if the camera is running. Users should check this 
         # gets the last image in the buffer
-        img = FliSdk_V2.GetRawImageAsNumpyArray( self.camera , -1)       
-        return(img)    
+        img = FliSdk_V2.GetRawImageAsNumpyArray( self.camera , -1)
+        cropped_img = img[self.pupil_crop_region[0]:self.pupil_crop_region[1],self.pupil_crop_region[2]: self.pupil_crop_region[3]]       
+        return(cropped_img.astype(int))    # make sure int and not uint16 which overflows easily
+
 
     def start_camera(self):
         FliSdk_V2.Start(self.camera)
@@ -205,10 +220,19 @@ class ZWFS():
     def set_camera_fps(self, fps):
         FliSdk_V2.FliSerialCamera.SetFps(self.camera, fps)
 
-
-    def crop_camera( self, region ):
-        print('')
+    
+    def update_pupil_pixel_filter(self): 
+        # updates self.pupil_pixel_filter, self.pupil_pixels, 
+        # Need to decide if we also have to update central reference points here? - I dont think so
+        return(None)
+ 
+    def update_reference_regions_in_img(self, pupil_report ):
        
+        self.pupil_pixel_filter = pupil_report['pupil_pixel_filter']
+        self.pupil_pixels = pupil_report['pupil_pixels']  
+        self.pupil_center_ref_pixels = pupil_report['pupil_center_ref_pixels']
+        self.dm_center_ref_pixels = pupil_report['dm_center_ref_pixels']
        
+    
        
        

@@ -1,5 +1,6 @@
 
 import numpy as np 
+import matplotlib.pyplot as plt 
 import pyzelda.utils.zernike as zernike
 
 # ============== UTILITY FUNCTIONS
@@ -14,6 +15,8 @@ def construct_command_basis( basis='Zernike', number_of_modes = 20, Nx_act_DM = 
     act_offset = tuple, (actuator row offset, actuator column offset) to offset the basis on DM (i.e. we can have a non-centered basis)
      
     """
+
+   
     # shorter notations
     #Nx_act = DM.num_actuators_width() # number of actuators across diameter of DM.
     #Nx_act_basis = actuators_across_diam
@@ -24,6 +27,9 @@ def construct_command_basis( basis='Zernike', number_of_modes = 20, Nx_act_DM = 
     bmcdm_basis_list = []
     # to deal with
     if basis == 'Zernike':
+        if without_piston:
+            number_of_modes += 1 # we add one more mode since we dont include piston 
+
         raw_basis = zernike.zernike_basis(nterms=number_of_modes, npix=Nx_act_basis )
         for i,B in enumerate(raw_basis):
             # normalize <B|B>=1, <B>=0 (so it is an offset from flat DM shape)
@@ -36,7 +42,6 @@ def construct_command_basis( basis='Zernike', number_of_modes = 20, Nx_act_DM = 
                 pad_width = (Nx_act_DM - B.shape[0] )//2 + 1
                 padded_B = shift( np.pad( Bnorm , pad_width , constant_values=(np.nan,)) , c[0], c[1])[:-1,:-1]  # we take off end due to odd numebr
 
-
             flat_B = padded_B.reshape(-1) # flatten basis so we can put it in the accepted DM command format
             np.nan_to_num(flat_B,0 ) # convert nan -> 0
             flat_B[corner_indices] = np.nan # convert DM corners to nan (so lenght flat_B = 140 which corresponds to BMC-3.5 DM)
@@ -44,13 +49,15 @@ def construct_command_basis( basis='Zernike', number_of_modes = 20, Nx_act_DM = 
             # now append our basis function removing corners (nan values)
             bmcdm_basis_list.append( flat_B[np.isfinite(flat_B)] )
 
-    # our mode 2 command matrix
-    if without_piston:
-        M2C = np.array( bmcdm_basis_list )[1:].T #remove piston mode
-    else:
-        M2C = np.array( bmcdm_basis_list ).T # take transpose to make columns the modes in command space.
-       
-
+        # our mode 2 command matrix
+        if without_piston:
+            M2C = np.array( bmcdm_basis_list )[1:].T #remove piston mode
+        else:
+            M2C = np.array( bmcdm_basis_list ).T # take transpose to make columns the modes in command space.
+    elif basis == 'Zonal': 
+        M2C = np.eye(Nx_act_DM) # we just consider this over all actuators (so defaults to 140 modes) 
+        # we filter zonal basis in the eigenvectors of the control matrix. 
+ 
     return(M2C)
 
 
@@ -123,6 +130,41 @@ def move_fpm( tel, pos = 0):
     elif pos == 1:  
         print( 'move FPM to position Y') #etc
     """
+    return(None)
 
 
+def watch_camera(zwfs, frames_to_watch = 10, time_between_frames=0.01,cropping_corners=None) :
+  
+    print( f'{frames_to_watch} frames to watch with ~{time_between_frames}s wait between frames = ~{5*time_between_frames*frames_to_watch}s watch time' )
 
+    #t0= datetime.datetime.now() 
+    plt.figure(figsize=(15,15))
+    plt.ion() # turn on interactive mode 
+    #FliSdk_V2.Start(camera)     
+    seconds_passed = 0
+    if type(cropping_corners)==list: 
+        x1,x2,y1,y2 = cropping_corners #[row min, row max, col min, col max]
+
+    for i in range(int(frames_to_watch)): 
+        
+        a = zwfs.get_image()
+        if type(cropping_corners)==list: 
+            plt.imshow(a[x1:x2,y1:y2])
+        else: 
+            plt.imshow(a)
+        plt.pause( time_between_frames )
+        #time.sleep( time_between_frames )
+        plt.clf() 
+    """
+    while seconds_passed < seconds_to_watch:
+        a=FliSdk_V2.GetRawImageAsNumpyArray(camera,-1)
+        plt.imshow(a)
+        plt.pause( time_between_frames )
+        time.sleep( time_between_frames )
+        plt.clf() 
+        t1 = datetime.datetime.now() 
+        seconds_passed = (t1 - t0).seconds"""
+
+    #FliSdk_V2.Stop(camera) 
+    plt.ioff()# turn off interactive mode 
+    plt.close()
