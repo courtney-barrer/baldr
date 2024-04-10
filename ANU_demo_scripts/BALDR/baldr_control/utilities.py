@@ -2,6 +2,9 @@
 import numpy as np 
 import matplotlib.pyplot as plt 
 import pyzelda.utils.zernike as zernike
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+
+from scipy import ndimage
 
 # ============== UTILITY FUNCTIONS
 def construct_command_basis( basis='Zernike', number_of_modes = 20, Nx_act_DM = 12, Nx_act_basis = 12, act_offset=(0,0), without_piston=True):
@@ -168,3 +171,164 @@ def watch_camera(zwfs, frames_to_watch = 10, time_between_frames=0.01,cropping_c
     #FliSdk_V2.Stop(camera) 
     plt.ioff()# turn off interactive mode 
     plt.close()
+
+
+
+
+
+
+
+def create_phase_screen_cmd_for_DM(scrn, flat_reference, scaling_factor=0.1, drop_indicies = None, plot_cmd=False):
+    """
+    aggregate a scrn (aotools.infinitephasescreen object) onto a DM command space. phase screen is normalized by
+    between +-0.5 and then scaled by scaling_factor and offset by flat_reference command. Final DM command values should
+    always be between 0-1. phase screens are usually a NxN matrix, while DM is MxM with some missing pixels (e.g. 
+    corners). drop_indicies is a list of indicies in the flat MxM DM array that should not be included in the command space. 
+    """
+
+    #print('----------\ncheck phase screen size is multiple of DM\n--------')
+    
+    Nx_act = 12 #number of actuators across DM diameter
+    
+    scrn_array = ( scrn.scrn - np.min(scrn.scrn) ) / (np.max(scrn.scrn) - np.min(scrn.scrn)) - 0.5 # normalize phase screen between -0.5 - 0.5 
+    
+    size_factor = int(scrn_array.shape[0] / Nx_act) # how much bigger phase screen is to DM shape in x axis. Note this should be an integer!!
+    
+    # reshape screen so that axis 1,3 correspond to values that should be aggregated 
+    scrn_to_aggregate = scrn_array.reshape(scrn_array.shape[0]//size_factor, size_factor, scrn_array.shape[1]//size_factor, size_factor)
+    
+    # now aggreagate and apply the scaling factor 
+    scrn_on_DM = scaling_factor * np.mean( scrn_to_aggregate, axis=(1,3) ).reshape(-1) 
+
+    #If DM is missing corners etc we set these to nan and drop them before sending the DM command vector
+    #dm_cmd =  scrn_on_DM.to_list()
+    if drop_indicies != None:
+        for i in drop_indicies:
+            scrn_on_DM[i]=np.nan
+             
+    if plot_cmd: #can be used as a check that the command looks right!
+        fig,ax = plt.subplots(1,2,figsize=(12,6))
+        im0 = ax[0].imshow(np.mean(flat_reference) + scrn_on_DM.reshape([Nx_act,Nx_act]) )
+        ax[0].set_title('DM command (averaging offset)')
+        im1 = ax[1].imshow(scrn.scrn)
+        ax[1].set_title('original phase screen')
+        plt.colorbar(im0, ax=ax[0])
+        plt.colorbar(im1, ax=ax[1]) 
+        plt.show() 
+
+    dm_cmd =  list( scrn_on_DM[np.isfinite(scrn_on_DM)] ) #drop non-finite values which should be nan values created from drop_indicies array
+    return(dm_cmd) 
+
+
+
+
+
+
+def block_sum(ar, fact): # sums over subwindows of a 2D array
+    # ar is the 2D array, fact is the factor to reduce it by 
+    # obviously  fact should be factor of ar.shape 
+    assert isinstance(fact, int), type(fact)
+    sx, sy = ar.shape
+    X, Y = np.ogrid[0:sx, 0:sy]
+    regions = sy//fact * (X//fact) + Y//fact
+    res = ndimage.sum(ar, labels=regions, index=np.arange(regions.max() + 1))
+    res.shape = (sx//fact, sy//fact)
+    return res
+
+
+
+
+def nice_heatmap_subplots( im_list , xlabel_list, ylabel_list, title_list,cbar_label_list, fontsize=15, cbar_orientation = 'bottom', axis_off=True, savefig=None):
+
+    n = len(im_list)
+    fs = fontsize
+    fig = plt.figure(figsize=(5*n, 5))
+
+    for a in range(n) :
+        ax1 = fig.add_subplot(int(f'1{n}{a+1}'))
+        ax1.set_title(title_list[a] ,fontsize=fs)
+
+        im1 = ax1.imshow(  im_list[a] )
+        ax1.set_title( title_list[a] ,fontsize=fs)
+        ax1.set_xlabel( xlabel_list[a] ,fontsize=fs) 
+        ax1.set_ylabel( ylabel_list[a] ,fontsize=fs) 
+        ax1.tick_params( labelsize=fs ) 
+
+        if axis_off:
+            ax1.axis('off')
+        divider = make_axes_locatable(ax1)
+        if cbar_orientation == 'bottom':
+            cax = divider.append_axes('bottom', size='5%', pad=0.05)
+            cbar = fig.colorbar( im1, cax=cax, orientation='horizontal')
+        elif cbar_orientation == 'top':
+            cax = divider.append_axes('top', size='5%', pad=0.05)
+            cbar = fig.colorbar( im1, cax=cax, orientation='horizontal')
+        else: # we put it on the right 
+            cax = divider.append_axes('right', size='5%', pad=0.05)
+            cbar = fig.colorbar( im1, cax=cax, orientation='vertical')           
+        cbar.set_label( cbar_label_list[a], rotation=0,fontsize=fs)
+        cbar.ax.tick_params(labelsize=fs)
+    if savefig!=None:
+        plt.savefig( savefig , bbox_inches='tight', dpi=300) 
+
+    plt.show() 
+
+
+
+def test_controller_in_cmd_space( zwfs, phase_controller, Vw =None , D=None , AO_lag=None  ):
+    #outputs fits file with telemetry  
+    # applies open loop for X iterations, Closed loop for Y iterations
+    # ability to ramp number of controlled modes , how to deal with gains? gain = 1/number controlled modes for Zernike basis
+
+    #open loop 
+    for i in range(X) : 
+
+        for i in range( 3 ) :
+            raw_img_list.append( zwfs.get_image() ) # @D, remember for control_phase method this needs to be flattened and filtered for pupil region
+
+        raw_img.append( np.median( raw_img_list, axis = 0 ) ) 
+
+        # ALSO MANUALLY GET PSF IMAGE 
+        
+        err_img.append(  phase_controller.get_img_err( raw_img[-1].reshape(-1)[zwfs.pupil_pixels]  ) )
+
+        reco_modes.append( phase_controller.control_phase( err_img[-1]  , controller_name = ctrl_method_label) )
+
+        reco_dm_cmds.append( phase_controller.config['M2C'] @ mode_reco[-1] )
+
+        delta_cmd.append( Ki * delta_cmd[-1] - Kp * reco_dm_cmds[-1] )
+
+        # propagate_phase_screen one step 
+
+        # don't yet apply the correction cmd while in open loop
+        zwfs.dm.send_data( zwfs.dm_shapes['flat_dm'] + dist[-1] ) 
+
+        time.sleep(0.1)
+
+
+    #close loop 
+    for i in range(X) : 
+
+        for i in range( 3 ) :
+            raw_img_list.append( zwfs.get_image() ) # @D, remember for control_phase method this needs to be flattened and filtered for pupil region
+
+        raw_img.append( np.median( raw_img_list, axis = 0 ) ) 
+
+        err_img.append(  phase_controller.get_img_err( raw_img[-1].reshape(-1)[zwfs.pupil_pixels]  ) )
+
+        reco_modes.append( phase_controller.control_phase( err_img[-1]  , controller_name = ctrl_method_label) )
+
+        reco_dm_cmds.append( phase_controller.config['M2C'] @ mode_reco[-1] )
+
+        delta_cmd.append( Ki * delta_cmd[-1] - Kp * reco_dm_cmds[-1] )
+
+        # propagate_phase_screen one step 
+
+        # then apply the correction 
+        zwfs.dm.send_data( zwfs.dm_shapes['flat_dm'] + delta_cmd[-1] + dist[-1] )
+
+        time.sleep(0.1)
+
+
+
+

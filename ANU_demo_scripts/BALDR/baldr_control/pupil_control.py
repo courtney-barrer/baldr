@@ -40,7 +40,7 @@ class pupil_controller_1():
 
         # check if camera is running
 
-        amp = 0.1
+        amp = 0.15
         #push DM corner actuators & get image 
         zwfs.send_cmd(zwfs.dm_shapes['flat_dm'] + amp * zwfs.dm_shapes['four_torres'] ) 
         time.sleep(0.003)
@@ -144,7 +144,7 @@ def analyse_pupil_openloop( zwfs, debug = True, return_report = True):
     # make sure phase mask is IN !!!! 
     hardware.set_phasemask( phasemask = 'posX' ) # no motors to implement this on yet, so does nothing 
 
-    amp = 0.02
+    amp = 0.1
     delta_img_list = [] # hold our images, which we will take median of 
     for _ in range(10): # get median of 10 images 
         #push DM corner actuators & get image 

@@ -12,7 +12,7 @@ must do the logic to check and update state
 
 """
 
-import bmc
+
 import numpy as np
 import os
 import glob 
@@ -21,6 +21,7 @@ os.chdir('/opt/FirstLightImaging/FliSdk/Python/demo/')
 import FliSdk_V2 
 import pandas as pd 
 
+from . import utilities as util
 
                 
 
@@ -93,13 +94,17 @@ class ZWFS():
             print('DMshapes path does not exist. Empty dictionary appended to ZWFS.dm_shapes')
 
         self.dm_shapes = shapes_dict
-           
-        # define our region where we can robustly expect to uniquely find the ZWFS pupil. 
+        
+        #  we can aggregate the output image over a sub window WxW where W = pixelation_factor.
+        # we use this sometimes when oversample pupil, so can use this to get to expected number of pixels with some careful choices
+        self.pixelation_factor = None 
+        
+
         # this is placed as an attribute here since from 1 image we will have 4 pupils 
         # which will control 4 different DMs.
         # So we need to define where to find each pupil for any given image taken. 
         if pupil_crop_region == None:
-            self.pupil_crop_region = [None, None, None, None] # no cropping of the image
+            pupil_crop_region = [None, None, None, None] # no cropping of the image
         elif hasattr(pupil_crop_region, '__len__'):
             if len( pupil_crop_region ) == 4:
                 if all(isinstance(x, int) for x in pupil_crop_region):
@@ -114,16 +119,10 @@ class ZWFS():
             self.pupil_crop_region = [None, None, None, None]
             print('pupil_crop_region has INVALID type. Needs to be list of integers of length = 4')
 
-        #define pixel coordinates in this cropped region  
-        r1, r2, c1, c2 = self.pupil_crop_region
-        if self.pupil_crop_region != [None, None, None, None]:
-            self.row_coords = np.linspace( (r1 - r2)/2 , (r2 - r1)/2, r2-r1)  #rows
-            self.col_coords = np.linspace( (c1 - c2)/2 , (c2 - c1)/2, c2-c1)  #columns
-        else: # full image 
-            r1 = 0; c1 = 0
-            c2, r2 = FliSdk_V2.GetCurrentImageDimension(self.camera)
-            self.row_coords = np.linspace( (r1 - r2)/2 , (r2 - r1)/2, r2-r1)  #rows
-            self.col_coords = np.linspace( (c1 - c2)/2 , (c2 - c1)/2, c2-c1)  #columns
+        # define our image coordinates based on cropping and pixelisation
+        self._update_image_coordinates( )
+
+        # define our region where we can robustly expect to uniquely find the ZWFS pupil. 
 
         # ========== initiate info on reference regions that controllers will need to work.
         """
@@ -160,6 +159,38 @@ class ZWFS():
         self.states['busy'] = 0 # 1 if the ZWFS is doing something
         # etc 
        
+
+
+
+    def _update_image_coordinates(self): 
+        # define coordinates in our image based on cropping and pixelisation factors 
+        
+        #define pixel coordinates in this cropped region  
+        r1, r2, c1, c2 = self.pupil_crop_region
+        if (self.pupil_crop_region != [None, None, None, None]) & (self.pixelation_factor == None) :
+            self.row_coords = np.linspace( (r1 - r2)/2 , (r2 - r1)/2, r2-r1)  #rows
+            self.col_coords = np.linspace( (c1 - c2)/2 , (c2 - c1)/2, c2-c1)  #columns
+        elif (self.pupil_crop_region != [None, None, None, None]) & (self.pixelation_factor != None) :
+            pf = self.pixelation_factor
+            self.row_coords = np.linspace( 1/pf * (r1 - r2)/2 , 1/pf * (r2 - r1)/2, int(1/pf * (r2-r1) ) )  #rows
+            self.col_coords = np.linspace( 1/pf * (c1 - c2)/2 , 1/pf * (c2 - c1)/2, int(1/pf * (c2-c1) ) )  #columns
+
+        elif (self.pupil_crop_region == [None, None, None, None]) & (self.pixelation_factor == None) :# full image 
+            r1 = 0; c1 = 0
+            c2, r2 = FliSdk_V2.GetCurrentImageDimension(self.camera)
+            self.row_coords = np.linspace( (r1 - r2)/2 , (r2 - r1)/2, r2-r1)  #rows
+            self.col_coords = np.linspace( (c1 - c2)/2 , (c2 - c1)/2, c2-c1)  #columns
+
+        elif (self.pupil_crop_region == [None, None, None, None]) & (self.pixelation_factor != None) :
+            r1 = 0; c1 = 0
+            c2, r2 = FliSdk_V2.GetCurrentImageDimension(self.camera)
+            pf = self.pixelation_factor
+            self.row_coords = np.linspace( 1/pf * (r1 - r2)/2 , 1/pf * (r2 - r1)/2, int(1/pf * (r2-r1) ) )  #rows
+            self.col_coords = np.linspace( 1/pf * (c1 - c2)/2 , 1/pf * (c2 - c1)/2, int(1/pf *(c2-c1) ) )  #columns
+
+
+
+
     def send_cmd(self, cmd):
        
         self.dm_err_flag = self.dm.send_data(cmd)
@@ -178,11 +209,17 @@ class ZWFS():
                     print('raise an error or implement some workaround if the requested state cannot be realised')
 
     def get_image(self):
+
         # I do not check if the camera is running. Users should check this 
         # gets the last image in the buffer
         img = FliSdk_V2.GetRawImageAsNumpyArray( self.camera , -1)
-        cropped_img = img[self.pupil_crop_region[0]:self.pupil_crop_region[1],self.pupil_crop_region[2]: self.pupil_crop_region[3]]       
-        return(cropped_img.astype(int))    # make sure int and not uint16 which overflows easily
+        cropped_img = img[self.pupil_crop_region[0]:self.pupil_crop_region[1],self.pupil_crop_region[2]: self.pupil_crop_region[3]].astype(int)  # make sure int and not uint16 which overflows easily     
+        
+        if type( self.pixelation_factor ) == int : 
+            cropped_img = util.block_sum(ar=cropped_img, fact = self.pixelation_factor)
+        elif self.pixelation_factor != None:
+            raise TypeError('ZWFS.pixelation_factor has to be of type None or int')
+        return(cropped_img)    
 
 
     def start_camera(self):
