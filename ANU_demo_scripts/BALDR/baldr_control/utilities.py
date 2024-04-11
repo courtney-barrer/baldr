@@ -16,6 +16,7 @@ def construct_command_basis( basis='Zernike', number_of_modes = 20, Nx_act_DM = 
     Nx_act_DM = int, number of actuators across DM diameter
     Nx_act_basis = int, number of actuators across the active basis diameter
     act_offset = tuple, (actuator row offset, actuator column offset) to offset the basis on DM (i.e. we can have a non-centered basis)
+    IM_covariance = None or an interaction matrix from command to measurement space. This only needs to be provided if you want KL modes, for this the number of modes is infered by the shape of the IM matrix. 
      
     """
 
@@ -38,6 +39,7 @@ def construct_command_basis( basis='Zernike', number_of_modes = 20, Nx_act_DM = 
             # normalize <B|B>=1, <B>=0 (so it is an offset from flat DM shape)
             Bnorm = np.sqrt( 1/np.nansum( B**2 ) ) * B
             # pad with zeros to fit DM square shape and shift pixels as required to center
+            # we also shift the basis center with respect to DM if required
             if np.mod( Nx_act_basis, 2) == 0:
                 pad_width = (Nx_act_DM - B.shape[0] )//2
                 padded_B = shift( np.pad( Bnorm , pad_width , constant_values=(np.nan,)) , c[0], c[1])
@@ -57,10 +59,48 @@ def construct_command_basis( basis='Zernike', number_of_modes = 20, Nx_act_DM = 
             M2C = np.array( bmcdm_basis_list )[1:].T #remove piston mode
         else:
             M2C = np.array( bmcdm_basis_list ).T # take transpose to make columns the modes in command space.
+
+
+    elif basis == 'KL':         
+        if without_piston:
+            number_of_modes += 1 # we add one more mode since we dont include piston 
+
+        raw_basis = zernike.zernike_basis(nterms=number_of_modes, npix=Nx_act_basis )
+        b0 = np.array( [np.nan_to_num(b) for b in raw_basis] )
+        cov0 = np.cov( b0.reshape(len(b0),-1) )
+        U , S, UT = np.linalg.svd( cov0 )
+        KL_raw_basis = ( b0.T @ U ).T # KL modes that diagonalize Zernike covariance matrix 
+        for i,B in enumerate(KL_raw_basis):
+            # normalize <B|B>=1, <B>=0 (so it is an offset from flat DM shape)
+            Bnorm = np.sqrt( 1/np.nansum( B**2 ) ) * B
+            # pad with zeros to fit DM square shape and shift pixels as required to center
+            # we also shift the basis center with respect to DM if required
+            if np.mod( Nx_act_basis, 2) == 0:
+                pad_width = (Nx_act_DM - B.shape[0] )//2
+                padded_B = shift( np.pad( Bnorm , pad_width , constant_values=(np.nan,)) , c[0], c[1])
+            else:
+                pad_width = (Nx_act_DM - B.shape[0] )//2 + 1
+                padded_B = shift( np.pad( Bnorm , pad_width , constant_values=(np.nan,)) , c[0], c[1])[:-1,:-1]  # we take off end due to odd numebr
+
+            flat_B = padded_B.reshape(-1) # flatten basis so we can put it in the accepted DM command format
+            np.nan_to_num(flat_B,0 ) # convert nan -> 0
+            flat_B[corner_indices] = np.nan # convert DM corners to nan (so lenght flat_B = 140 which corresponds to BMC-3.5 DM)
+
+            # now append our basis function removing corners (nan values)
+            bmcdm_basis_list.append( flat_B[np.isfinite(flat_B)] )
+
+        # our mode 2 command matrix
+        if without_piston:
+            M2C = np.array( bmcdm_basis_list )[1:].T #remove piston mode
+        else:
+            M2C = np.array( bmcdm_basis_list ).T # take transpose to make columns the modes in command space.
+
     elif basis == 'Zonal': 
         M2C = np.eye(Nx_act_DM) # we just consider this over all actuators (so defaults to 140 modes) 
         # we filter zonal basis in the eigenvectors of the control matrix. 
  
+    #elif basis == 'Sensor_Eigenmodes': this is done specifically in a phase_control.py function - as it needs a interaction matrix covariance first 
+
     return(M2C)
 
 
