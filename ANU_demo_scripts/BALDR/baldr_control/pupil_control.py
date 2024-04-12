@@ -225,12 +225,12 @@ def analyse_pupil_openloop( zwfs, debug = True, return_report = True):
     else:
         report['got_expected_illum_pixels'] = 0 # check for vignetting etc. 
 
-    if abs(x_dm_center - x_pupil_center) < 5 : #pixels - TO DO put reasonable values here 
+    if abs(x_dm_center - x_pupil_center) < 50 : #pixels - TO DO put reasonable values here 
         report['dm_center_pix_x=pupil_center_x'] = 1
     else:
         report['dm_center_pix_x=pupil_center_x'] = 0
 
-    if abs(y_dm_center - y_pupil_center) < 5 : #pixels - TO DO put reasonable values here 
+    if abs(y_dm_center - y_pupil_center) < 50 : #pixels - TO DO put reasonable values here 
         report['dm_center_pix_y=pupil_center_y'] = 1
     else:
         report['dm_center_pix_y=pupil_center_y'] = 0

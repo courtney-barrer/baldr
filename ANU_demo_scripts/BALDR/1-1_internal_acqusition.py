@@ -94,6 +94,19 @@ ctrl_method_label = 'ctrl_1'
 phase_ctrl.build_control_model( zwfs , poke_amp = -0.15, label=ctrl_method_label, debug = True)  
 #pupil_ctrl tells phase_ctrl where the pupil is
 
+# double check DM is flat 
+zwfs.dm.send_data( zwfs.dm_shapes['flat_dm'] )
+
+
+#update to WFS_Eigenmodes modes (DM modes that diagonalize the systems interaction matrix) 
+phase_ctrl.change_control_basis_parameters( controller_label = ctrl_method_label, number_of_controlled_modes=phase_ctrl.config['number_of_controlled_modes'], basis_name='WFS_Eigenmodes' ,dm_control_diameter=None, dm_control_center=None)
+
+# now build control model on KL modes 
+phase_ctrl.build_control_model( zwfs , poke_amp = -0.15, label='ctrl_2', debug = True) 
+
+plt.figure()
+plt.imshow( util.get_DM_command_in_2D( phase_ctrl.config['M2C'].T[2] ) );plt.show()
+
 if debug: 
     # put a mode on DM and reconstruct it with our CM 
     amp = -0.15
@@ -155,7 +168,15 @@ if debug:
 
 
 
+if debug: 
+    im_list = [phase_ctrl.I0_2D/np.mean(phase_ctrl.N0 ) - phase_ctrl.N0_2D/np.mean(phase_ctrl.N0 ) ]
+    xlabel_list = ['x [pixels]']
+    ylabel_list = ['y [pixels]']
+    title_list = ['FPM IN - FPM OUT']
+    cbar_label_list = ['Normalized pupil intensity']
+    savefig =  None #fig_path + f'pupil_FPM_IN-OUT_readout_mode-12x12.png'
 
+    util.nice_heatmap_subplots( im_list , xlabel_list, ylabel_list, title_list, cbar_label_list, fontsize=15, axis_off=True, cbar_orientation = 'bottom', savefig=savefig)
 
 
 

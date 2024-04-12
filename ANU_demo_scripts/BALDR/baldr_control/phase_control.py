@@ -261,12 +261,51 @@ class phase_controller_1():
         errsig =  np.array( ( (img - self.I0) / np.median( self.N0 ) ) )
         return(  errsig )
 
-    def update_FPM_OUT_reference() : 
-        print('to do')
+    def update_FPM_OUT_reference(self, ZWFS) : 
+        
+        imgs_to_median = 10 # how many images do we take the median of to build signal the reference signals 
+        # check other states match such as source etc
 
+        # =========== PHASE MASK OUT 
+        hardware.set_phasemask( phasemask = 'out' ) # THIS DOES NOTHING SINCE DONT HAVE MOTORS YET.. for now we just look at the pupil so we can manually move phase mask in and out. 
+        _ = input('MANUALLY MOVE PHASE MASK OUT OF BEAM, PRESS ANY KEY TO BEGIN' )
+        util.watch_camera(ZWFS, frames_to_watch = 50, time_between_frames=0.05)
 
-    def update_FPM_IN_reference() :
-        print('to do')
+        ZWFS.states['fpm'] = 0
+
+        N0_list = []
+        for _ in range(imgs_to_median):
+            N0_list.append( ZWFS.get_image(  ) ) #REFERENCE INTENSITY WITH FPM IN
+        N0 = np.median( N0_list, axis = 0 ) 
+        #put self.config['fpm'] phasemask on-axis (for now I only have manual adjustment)
+
+        # === ADD ATTRIBUTES 
+        self.N0 = N0.reshape(-1)[np.array( ZWFS.pupil_pixels )] # append reference intensity over defined pupil with FPM OUT 
+
+        # === also add the unfiltered so we can plot and see them easily on square grid after 
+        self.N0_2D = N0 # 2D array (not filtered by pupil pixel filter) 
+
+    def update_FPM_IN_reference(self, ZWFS):
+
+        imgs_to_median = 10 # how many images do we take the median of to build signal the reference signals 
+        # =========== PHASE MASK IN 
+        hardware.set_phasemask( phasemask = 'posX' ) # # THIS DOES NOTHING SINCE DONT HAVE MOTORS YET.. for now we just look at the pupil so we can manually move phase mask in and out. 
+        _ = input('MANUALLY MOVE PHASE MASK BACK IN, PRESS ANY KEY TO BEGIN' )
+        util.watch_camera(ZWFS, frames_to_watch = 50, time_between_frames=0.05)
+
+        ZWFS.states['fpm'] = self.config['fpm']
+
+        I0_list = []
+        for _ in range(imgs_to_median):
+            I0_list.append( ZWFS.get_image(  ) ) #REFERENCE INTENSITY WITH FPM IN
+        I0 = np.median( I0_list, axis = 0 ) 
+        
+        # === ADD ATTRIBUTES 
+        self.I0 = I0.reshape(-1)[np.array( ZWFS.pupil_pixels )] # append reference intensity over defined pupil with FPM IN 
+
+        # === also add the unfiltered so we can plot and see them easily on square grid after 
+        self.I0_2D = I0 # 2D array (not filtered by pupil pixel filter)  
+  
 
 
     def control_phase(self, img, controller_name ):

@@ -9,6 +9,7 @@ import time
 
 
 fig_path = '/home/baldr/Documents/baldr/ANU_demo_scripts/BALDR/figures/' 
+data_path = '/home/baldr/Documents/baldr/ANU_demo_scripts/BALDR/data/' 
 
 debug = True # plot some intermediate results 
 fps = 400 
@@ -106,7 +107,7 @@ zwfs.dm.send_data( zwfs.dm_shapes['flat_dm'] )
 #phase_ctrl_Z_20.build_control_model( zwfs , poke_amp = -0.15, label='Zernike_20', debug = True)  
 
 # double check DM is flat 
-zwfs.dm.send_data( zwfs.dm_shapes['flat_dm'] )
+#zwfs.dm.send_data( zwfs.dm_shapes['flat_dm'] )
 
 phase_ctrl_KL_70.build_control_model( zwfs , poke_amp = -0.15, label='KL_70', debug = True) 
 # double check DM is flat 
@@ -118,19 +119,86 @@ zwfs.dm.send_data( zwfs.dm_shapes['flat_dm'] )
 # double check DM is flat 
 zwfs.dm.send_data( zwfs.dm_shapes['flat_dm'] )
 
+
+
+phase_ctrl = phase_ctrl_Z_70
+ctrl_method_label = 'Zernike_70'
+if debug: # plot covariance of interaction matrix 
+    #plt.title('Covariance of Interaciton Matrix')
+    im_list = [np.cov( phase_ctrl.ctrl_parameters[ctrl_method_label]['IM'] ) / np.max( abs( np.cov( phase_ctrl.ctrl_parameters[ctrl_method_label]['IM'] ) ) ) ]
+    xlabel_list = [f'{phase_ctrl.config["basis"]} mode index i']
+    ylabel_list = [f'{phase_ctrl.config["basis"]} mode index j']
+    title_list = [None]
+    cbar_label_list = [r'$\sigma^2_{i,j}$']
+    savefig = None #fig_path + f'IM_covariance_matrix_basis-{phase_ctrl.config["basis"]}_ctrl_modes-{phase_ctrl.config["number_of_controlled_modes"]}_readout_mode-6x6.png'
+
+    util.nice_heatmap_subplots( im_list , xlabel_list, ylabel_list, title_list, cbar_label_list, fontsize=15, axis_off=False, cbar_orientation = 'right', savefig=savefig)
+
+
+
+
 #update to Eigenmodes 
 phase_ctrl_Z_70.change_control_basis_parameters(  number_of_controlled_modes=phase_ctrl.config['number_of_controlled_modes'], basis_name='WFS_Eigenmodes' ,dm_control_diameter=None, dm_control_center=None, controller_label = 'Zernike_70')
 
-# now build control model on KL modes 
-#phase_ctrl_Z.build_control_model( zwfs , poke_amp = -0.15, label='WFS_Eigenmodes_70', debug = True) 
+# now build control model on eigenmodes modes 
+phase_ctrl_Z_70.build_control_model( zwfs , poke_amp = -0.15, label='WFS_Eigenmodes_70', debug = True) 
 
 # double check DM is flat 
 zwfs.dm.send_data( zwfs.dm_shapes['flat_dm'] )
 
+phase_ctrl = phase_ctrl_Z_70
+ctrl_method_label = 'WFS_Eigenmodes_70'
+if debug: # plot covariance of interaction matrix 
+    #plt.title('Covariance of Interaciton Matrix')
+    im_list = [np.cov( phase_ctrl.ctrl_parameters[ctrl_method_label]['IM'] ) / np.max( abs( np.cov( phase_ctrl.ctrl_parameters[ctrl_method_label]['IM'] ) ) ) ]
+    xlabel_list = [f'{phase_ctrl.config["basis"]} mode index i']
+    ylabel_list = [f'{phase_ctrl.config["basis"]} mode index j']
+    title_list = [None]
+    cbar_label_list = [r'$\sigma^2_{i,j}$']
+    savefig =  None #fig_path + f'IM_covariance_matrix_basis-{phase_ctrl.config["basis"]}_ctrl_modes-{phase_ctrl.config["number_of_controlled_modes"]}_readout_mode-6x6.png'
+
+    util.nice_heatmap_subplots( im_list , xlabel_list, ylabel_list, title_list, cbar_label_list, fontsize=15, axis_off=False, cbar_orientation = 'right', savefig=savefig)
+
+
+# Now look at eigenvalues of IM Eigenmodes to see how many modes we are really sensitive to in 10x10 actuators on DM in 12x12 readout. 
+cov = np.cov( phase_ctrl.ctrl_parameters['WFS_Eigenmodes_70']['IM'] ) 
+U, S, UT = np.linalg.svd( cov ) 
+
+fig, ax = plt.subplots(1,1,figsize=(8,5))
+fs = 15
+ax.semilogy( S/np.max(S) )
+ax.set_ylabel('WFS Eigenvalues',fontsize=fs)
+ax.set_xlabel('Mode index',fontsize=fs) 
+ax.tick_params(labelsize=fs)
+savefig =  None #fig_path + 'Eigenvalues_WFS_eigenbasis_ctrl_modes-70_readout_mode-6x6.png'
+#plt.savefig( savefig , bbox_inches='tight', dpi=300) 
+
+plt.show() 
+
+"""
+# write to csv 
+import pandas as pd
+pd.Series( S ).to_csv( data_path + 'WFS_eigenvalues_12x12.csv' , index=False, header=False)
+pd.DataFrame( phase_ctrl.config['M2C'] ).to_csv(data_path + 'WFS_eigenvectors_12x12.csv', index=False,header=False)
+"""
+S_6x6 = pd.read_csv( data_path + 'WFS_eigenvalues_6x6.csv',header=None).values.ravel()
+S_12x12 = pd.read_csv( data_path + 'WFS_eigenvalues_12x12.csv',header=None).values.ravel()
+
+fig, ax = plt.subplots(1,1,figsize=(8,5))
+fs = 15
+ax.semilogy( S_12x12/np.max(S_12x12) , label='12x12 pixels/pupil')
+ax.semilogy( S_6x6/np.max(S_6x6) , label='6x6 pixels/pupil')
+ax.set_ylabel('WFS Eigenvalues (normalized)',fontsize=fs)
+ax.set_xlabel('Mode index',fontsize=fs) 
+ax.tick_params(labelsize=fs)
+savefig =  fig_path + 'Eigenvalues_WFS_eigenbasis_READOUT_COMPARISON_ctrl_modes-70.png'
+#plt.savefig( savefig , bbox_inches='tight', dpi=300) 
+plt.legend(fontsize=fs)
+plt.show() 
 
 
 
-
+ 
 
 
 
