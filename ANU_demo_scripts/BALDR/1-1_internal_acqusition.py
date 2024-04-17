@@ -9,13 +9,15 @@ import time
 
 
 fig_path = '/home/baldr/Documents/baldr/ANU_demo_scripts/BALDR/figures/' 
+data_path = '/home/baldr/Documents/baldr/ANU_demo_scripts/BALDR/data/' 
+
 
 debug = True # plot some intermediate results 
 fps = 400 
 DIT = 2e-3 #s integration time 
 
 sw = 8 # 8 for 12x12, 16 for 6x6 
-pupil_crop_region = [165-sw, 261+sw, 106-sw, 202+sw ] #one pixel each side of pupil.  #tight->[165, 261, 106, 202 ]  #crop region around ZWFS pupil [row min, row max, col min, col max] 
+pupil_crop_region = [157-sw, 269+sw, 98-sw, 210+sw ] #[165-sw, 261+sw, 106-sw, 202+sw ] #one pixel each side of pupil.  #tight->[165, 261, 106, 202 ]  #crop region around ZWFS pupil [row min, row max, col min, col max] 
 
 #init our ZWFS (object that interacts with camera and DM)
 zwfs = ZWFS.ZWFS(DM_serial_number='17DW019#053', cameraIndex=0, DMshapes_path = '/home/baldr/Documents/baldr/ANU_demo_scripts/BALDR/DMShapes/', pupil_crop_region=pupil_crop_region ) 

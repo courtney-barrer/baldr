@@ -17,10 +17,11 @@ import numpy as np
 import os
 import glob 
 import bmc
-os.chdir('/opt/FirstLightImaging/FliSdk/Python/demo/')
-import FliSdk_V2 
+import sys  
 import pandas as pd 
 
+sys.path.insert(1, '/opt/FirstLightImaging/FliSdk/Python/demo/')
+import FliSdk_V2
 from . import utilities as util
 
                 

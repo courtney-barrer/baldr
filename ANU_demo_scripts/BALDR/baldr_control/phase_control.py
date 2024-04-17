@@ -261,7 +261,34 @@ class phase_controller_1():
         errsig =  np.array( ( (img - self.I0) / np.median( self.N0 ) ) )
         return(  errsig )
 
-    def update_FPM_OUT_reference(self, ZWFS) : 
+
+    def update_FPM_OUT_reference(self, ZWFS, N0_2D):
+        #N0_2D must be a 2D array of the estimate of the pupil intensity with the FPM mask out.
+        #ZWFS must be provided since this holds the pixel filter for the wavefront sensing 
+
+        # we should do some checking here that the input N0_2D matches number of pixels from ZWFS.get_image() 
+        r1, r2, c1, c2 = self.pupil_crop_region
+        if N0_2D.shape != [r2-r1, c2-c1]:
+            raise TypeError(f'N0_2D needs to have shape {[r2-r1,c2-c1]} to match image size produced from the input ZWFS object.')  
+
+        self.N0 = N0_2D.reshape(-1)[np.array( ZWFS.pupil_pixels )]
+        self.N0_2D = N0_2D   
+        
+
+    def update_FPM_IN_reference(self, ZWFS, I0_2D):
+        #N0_2D must be a 2D array of the estimate of the pupil intensity with the FPM mask out.
+        #ZWFS must be provided since this holds the pixel filter for the wavefront sensing 
+
+        # we should do some checking here that the input N0_2D matches number of pixels from ZWFS.get_image() 
+        r1, r2, c1, c2 = self.pupil_crop_region
+        if np.array(I0_2D).shape != [r2-r1, c2-c1]:
+            raise TypeError(f'N0_2D needs to have shape {[r2-r1,c2-c1]} to match image size produced from the input ZWFS object.')  
+
+        self.I0 = I0_2D.reshape(-1)[np.array( ZWFS.pupil_pixels )]
+        self.I0_2D = I0_2D   
+
+
+    def measure_FPM_OUT_reference(self, ZWFS) : 
         
         imgs_to_median = 10 # how many images do we take the median of to build signal the reference signals 
         # check other states match such as source etc
@@ -285,7 +312,7 @@ class phase_controller_1():
         # === also add the unfiltered so we can plot and see them easily on square grid after 
         self.N0_2D = N0 # 2D array (not filtered by pupil pixel filter) 
 
-    def update_FPM_IN_reference(self, ZWFS):
+    def measure_FPM_IN_reference(self, ZWFS):
 
         imgs_to_median = 10 # how many images do we take the median of to build signal the reference signals 
         # =========== PHASE MASK IN 
@@ -306,7 +333,6 @@ class phase_controller_1():
         # === also add the unfiltered so we can plot and see them easily on square grid after 
         self.I0_2D = I0 # 2D array (not filtered by pupil pixel filter)  
   
-
 
     def control_phase(self, img, controller_name ):
         # look for active ctrl_parameters, return label
