@@ -6,11 +6,14 @@ from baldr_control import utilities as util
 import numpy as np
 import matplotlib.pyplot as plt 
 import time 
+import datetime
 
 
 fig_path = '/home/baldr/Documents/baldr/ANU_demo_scripts/BALDR/figures/' 
 data_path = '/home/baldr/Documents/baldr/ANU_demo_scripts/BALDR/data/' 
 
+# timestamp
+tstamp = datetime.datetime.now().strftime("%d-%m-%YT%H.%M.%S")
 
 debug = True # plot some intermediate results 
 fps = 400 
@@ -23,9 +26,9 @@ pupil_crop_region = [157-sw, 269+sw, 98-sw, 210+sw ] #[165-sw, 261+sw, 106-sw, 2
 zwfs = ZWFS.ZWFS(DM_serial_number='17DW019#053', cameraIndex=0, DMshapes_path = '/home/baldr/Documents/baldr/ANU_demo_scripts/BALDR/DMShapes/', pupil_crop_region=pupil_crop_region ) 
 
 # ,------------------ AVERAGE OVER 8X8 SUBWIDOWS SO 12X12 PIXELS IN PUPIL
-zwfs.pixelation_factor = sw #8 # sum over 8x8 pixel subwindows in image
+#zwfs.pixelation_factor = sw #8 # sum over 8x8 pixel subwindows in image
 # HAVE TO PROPAGATE THIS TO PUPIL COORDINATES 
-zwfs._update_image_coordinates( )
+#zwfs._update_image_coordinates( )
 
 zwfs.set_camera_fps(fps) # set the FPS 
 zwfs.set_camera_dit(DIT) # set the DIT 
@@ -67,7 +70,7 @@ pupil_report = pupil_control.analyse_pupil_openloop( zwfs, debug = True, return_
 if pupil_report['pupil_quality_flag'] == 1: 
     # I think this needs to become attribute of ZWFS as the ZWFS object is always passed to pupil and phase control as an argunment to take pixtures and ctrl DM. The object controlling the camera should provide the info on where a controller object should look to apply control algorithm. otherwise pupil and phase controller would always need to talk to eachother. Also we will have 4 controllers in total
 
-    zwfs.update_reference_regions_in_img( pupil_report )
+    zwfs.update_reference_regions_in_img( pupil_report ) # 
     # this function just adds the following attributes 
     #zwfs.pupil_pixel_filter = pupil_report['pupil_pixel_filter']
     #zwfs.pupil_pixels = pupil_report['pupil_pixels']  
@@ -88,20 +91,27 @@ if debug:
 """
 
 
+# 1.22) fit data internally (influence functions, b etc) 
+# use baldr.
+recon_data = util.GET_BDR_RECON_DATA_INTERNAL(zwfs, number_amp_samples = 18, amp_max = 0.2, number_images_recorded_per_cmd = 2, save_fits = data_path+f'recon_data_{tstamp}.fits') 
+
+# process recon data to get a bunch of fits, DM actuator to pupil registration etc
+internal_cal_fits =  util.PROCESS_BDR_RECON_DATA_INTERNAL(recon_data ,active_dm_actuator_filter=phase_ctrl.config['active_actuator_filter'], debug=True, savefits=None  )
+
 # 1.3) builds our control model with the zwfs
 #control_model_report
-
-
 ctrl_method_label = 'ctrl_1'
 phase_ctrl.build_control_model( zwfs , poke_amp = -0.15, label=ctrl_method_label, debug = True)  
+
 #pupil_ctrl tells phase_ctrl where the pupil is
 
 # double check DM is flat 
 zwfs.dm.send_data( zwfs.dm_shapes['flat_dm'] )
 
 
+
 #update to WFS_Eigenmodes modes (DM modes that diagonalize the systems interaction matrix) 
-phase_ctrl.change_control_basis_parameters( controller_label = ctrl_method_label, number_of_controlled_modes=phase_ctrl.config['number_of_controlled_modes'], basis_name='WFS_Eigenmodes' ,dm_control_diameter=None, dm_control_center=None)
+phase_ctrl.change_control_basis_parameters( controller_label = ctrl_method_label, number_of_controlled_modes=phase_ctrl.config['number_of_controlled_modes'], basis_name='WFS_Eigenmodes' , dm_control_diameter=None, dm_control_center=None)
 
 # now build control model on KL modes 
 phase_ctrl.build_control_model( zwfs , poke_amp = -0.15, label='ctrl_2', debug = True) 

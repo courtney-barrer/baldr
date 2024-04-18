@@ -19,7 +19,7 @@ import FliSdk_V2
 # ============== UTILITY FUNCTIONS
 
 
-
+data_path = '/home/baldr/Documents/baldr/ANU_demo_scripts/BALDR/data/' 
 
 
 def construct_command_basis( basis='Zernike', number_of_modes = 20, Nx_act_DM = 12, Nx_act_basis = 12, act_offset=(0,0), without_piston=True):
@@ -293,6 +293,7 @@ def block_sum(ar, fact): # sums over subwindows of a 2D array
 
 
 
+# ========== PLOTTING STANDARDS 
 def nice_heatmap_subplots( im_list , xlabel_list, ylabel_list, title_list,cbar_label_list, fontsize=15, cbar_orientation = 'bottom', axis_off=True, savefig=None):
 
     n = len(im_list)
@@ -328,7 +329,21 @@ def nice_heatmap_subplots( im_list , xlabel_list, ylabel_list, title_list,cbar_l
 
     plt.show() 
 
+def nice_DM_plot( data, savefig=None ): #for a 140 actuator BMC 3.5 DM
+    fig,ax = plt.subplots(1,1)
+    if len( np.array(data).shape ) == 1: 
+        ax.imshow( get_DM_command_in_2D(data) )
+    else: 
+        ax.imshow( data )
+    ax.set_title('poorly registered actuators')
+    ax.grid(True, which='minor',axis='both', linestyle='-', color='k', lw=2 )
+    ax.set_xticks( np.arange(12) - 0.5 , minor=True)
+    ax.set_yticks( np.arange(12) - 0.5 , minor=True)
+    if savefig!=None:
+        plt.savefig( savefig , bbox_inches='tight', dpi=300) 
 
+
+# ==========
 
 def test_controller_in_cmd_space( zwfs, phase_controller, Vw =None , D=None , AO_lag=None  ):
     #outputs fits file with telemetry  
@@ -682,8 +697,9 @@ def Ic_model_constrained_3param(x, A,  F, mu):
     return I 
 
 
+
 # should this be free standing or a method? ZWFS? controller? - output a report / fits file
-def PROCESS_BDR_RECON_DATA_INTERNAL(data, debug=True) :
+def PROCESS_BDR_RECON_DATA_INTERNAL(data, active_dm_actuator_filter=None, debug=True, savefits=None) :
     """
     # calibration of our ZWFS: 
     # this will fit M0, b0, mu, F which can be appended to a phase_controller,
@@ -723,98 +739,103 @@ def PROCESS_BDR_RECON_DATA_INTERNAL(data, debug=True) :
     poke_imgs = recon_data['SEQUENCE_IMGS'].data[1:].reshape(No_ramps, 140, I0.shape[0], I0.shape[1])
     #poke_imgs = poke_imgs[1:].reshape(No_ramps, 140, I0.shape[0], I0.shape[1])
 
-
-    # ========================== !! 1 !! =====================
-    #  == define the region of influence on DM where we will fit out models (define a threshold for I(epsilon)_max -I_0). This is important because the quality of the fits can go to shit around pupil/DM edges, we only need some good samples around the center to reconstruct what we need, setting this threshold is semi automated here  
-
-    a0 = len(ramp_values)//2 - 2 # which poke values do we want to consider for finding region of influence. Pick a value near the center where in a linear regime. 
-
-    fig,ax= plt.subplots( 4, 4, figsize=(10,10))
-    num_pixels = []
-    candidate_thresholds = np.linspace(4 * np.std(abs(poke_imgs[a0,:,:,:] - I0)),np.max(abs(poke_imgs[a0,:,:,:] - I0)),16)
-    for axx, thresh in zip(ax.reshape(-1),candidate_thresholds):
+    a0 = len(ramp_values)//2 - 2 # which poke value (index) do we want to consider for finding region of influence. Pick a value near the center of the ramp (ramp values are from negative to positive) where we are in a linear regime.
     
-        dm_pupil_filt = thresh < np.array( [np.max( abs( poke_imgs[a0][act] - I0) ) for act in range(140)] ) 
-        axx.imshow( get_DM_command_in_2D( dm_pupil_filt ) ) 
-        axx.set_title('threshold = {}'.format(round( thresh )),fontsize=12) 
-        axx.axis('off')
-        num_pixels.append(sum(dm_pupil_filt)) 
-        # we could use this to automate threshold decision.. look for where 
-        # d num_pixels/ d threshold ~ 0.. np.argmin( abs( np.diff( num_pixels ) )[:10])
-    plt.show()
+    if hasattr(active_dm_actuator_filter,'__len__'):
+        #is it some form of boolean type?
+        bool_test = ( (all(isinstance(x,np.bool_) for x in active_dm_actuator_filter)) or (all(isinstance(x,bool) for x in active_dm_actuator_filter) ) )
+        #is it the right length (corresponds to number of DM actuators?) 
+        len_test = (len( active_dm_actuator_filter ) == Nact)
 
-    recommended_threshold = candidate_thresholds[np.argmin( abs( np.diff( num_pixels ) )[2:11]) + 1 ]
-    print( f'\n\nrecommended threshold ~ {round(recommended_threshold)} \n(check this makes sense with the graph by checking the colored area is stable around changes in threshold about this value)\n\n')
-
-    pupil_filt_threshold = float(input('input threshold of peak differences'))
-
-    ### <---- THIS FILTER DETERMINES WHERE WE FIT THE MODELS (ONLY FIT WHERE DM HAS GOOD INFLUENCE!)
-    dm_pupil_filt = pupil_filt_threshold < np.array( [np.max( abs( poke_imgs[a0][act] - I0) ) for act in range(Nact)] ) 
-
-    if debug:
-       plt.figure()
-       plt.imshow( get_DM_command_in_2D( dm_pupil_filt ) )
-       plt.title('influence region on DM where we will fit intensity models per actuator')
-       plt.show()
+        if len_test & bool_test:
+            dm_pupil_filt = np.array(active_dm_actuator_filter ) # force to numpy array
+        else:
+            raise TypeError('active_dm_actuator_filter needs to be list like with boolean entries (numpy or naitive) with length = 140 (corresponding to number of actuators on DM')
 
 
+    elif active_dm_actuator_filter==None:
+        # ========================== !! 1 !! =====================
+        #  == Then we let the user define the region of influence on DM where we will fit our models (by defining a threshold for I(epsilon)_max -I_0). This is important because the quality of the fits can go to shit around pupil/DM edges, we only need some good samples around the center to reconstruct what we need, setting this threshold is semi automated here  
+
+        fig,ax= plt.subplots( 4, 4, figsize=(10,10))
+        num_pixels = []
+        candidate_thresholds = np.linspace(4 * np.std(abs(poke_imgs[a0,:,:,:] - I0)),np.max(abs(poke_imgs[a0,:,:,:] - I0)),16)
+        for axx, thresh in zip(ax.reshape(-1),candidate_thresholds):
+    
+            dm_pupil_filt = thresh < np.array( [np.max( abs( poke_imgs[a0][act] - I0) ) for act in range(140)] ) 
+            axx.imshow( get_DM_command_in_2D( dm_pupil_filt ) ) 
+            axx.set_title('threshold = {}'.format(round( thresh )),fontsize=12) 
+            axx.axis('off')
+            num_pixels.append(sum(dm_pupil_filt)) 
+            # we could use this to automate threshold decision.. look for where 
+            # d num_pixels/ d threshold ~ 0.. np.argmin( abs( np.diff( num_pixels ) )[:10])
+        plt.show()
+
+        recommended_threshold = candidate_thresholds[np.argmin( abs( np.diff( num_pixels ) )[2:11]) + 1 ]
+        print( f'\n\nrecommended threshold ~ {round(recommended_threshold)} \n(check this makes sense with the graph by checking the colored area is stable around changes in threshold about this value)\n\n')
+
+        pupil_filt_threshold = float(input('input threshold of peak differences'))
+
+        ### <---- THIS FILTER DETERMINES WHERE WE FIT THE MODELS (ONLY FIT WHERE DM HAS GOOD INFLUENCE!)
+        dm_pupil_filt = pupil_filt_threshold < np.array( [np.max( abs( poke_imgs[a0][act] - I0) ) for act in range(Nact)] ) 
+
+        if debug:
+           plt.figure()
+           plt.imshow( get_DM_command_in_2D( dm_pupil_filt ) )
+           plt.title('influence region on DM where we will fit intensity models per actuator')
+           plt.show()
+
+
+      
     # ========================== !! 2 !! =====================
     # ======== P2C 
 
     Sw_x, Sw_y = 3,3 #+- pixels taken around region of peak influence. PICK ODD NUMBERS SO WELL CENTERED!   
-    act_img_mask = {}
-    act_flag = {}
-    act_img_idx = {}
-    #act2pix_idx = []
+    act_img_mask_1x1 = {} #pixel with peak sensitivity to the actuator
+    act_img_mask_3x3 = {} # 3x3 region around pixel with peak sensitivity to the actuator
+    poor_registration_list = np.zeros(Nact).astype(bool) # list of actuators in control region that have poor registration 
 
 
+    # I should probably include a threshold filter here - that no registration is made if delta < threshold
+    # threshold set to 5 sigma above background (seems to work - but can be tweaked) 
+    registration_threshold = 5 * np.mean(np.std(abs(poke_imgs- I0),axis=(0,1)) )
+    # how to best deal with actuators that have poor registration ?
     for act_idx in range(Nact):
         delta =  poke_imgs[a0][act_idx] - I0
 
-        mask = np.zeros( I0.shape )
-   
+        mask_3x3 = np.zeros( I0.shape )
+        mask_1x1 = np.zeros( I0.shape )
         if dm_pupil_filt[act_idx]: #  if we decided actuator has strong influence on ZWFS image, we 
-            i,j = np.unravel_index( np.argmax( abs(delta) ), I0.shape )
+            peak_delta = np.max( abs(delta) ) 
+            if peak_delta > registration_threshold:
 
-            #act2pix_idx.append( (i,j) ) 
-            mask[i-Sw_x-1: i+Sw_x, j-Sw_y-1:j+Sw_y] = 1 # keep centered, 
-            #mask *= 1/np.sum(mask[i-Sw_x-1: i+Sw_x, j-Sw_y-1:j+Sw_y]) #normalize by #pixels in window 
-            act_img_mask[act_idx] = mask 
-            act_img_idx[act_idx] = (i,j)  
-            act_flag[act_idx] = 1 
+                i,j = np.unravel_index( np.argmax( abs(delta) ), I0.shape )
+          
+                mask_3x3[i-Sw_x-1: i+Sw_x, j-Sw_y-1:j+Sw_y] = 1 # keep centered, 
+                mask_1x1[i,j] = 1 
+                #mask *= 1/np.sum(mask[i-Sw_x-1: i+Sw_x, j-Sw_y-1:j+Sw_y]) #normalize by #pixels in window 
+                act_img_mask_3x3[act_idx] = mask_3x3
+                act_img_mask_1x1[act_idx] = mask_1x1
+            else:
+                poor_registration_list[act_idx] = True
+                act_img_mask_3x3[act_idx] = mask_3x3 
+                act_img_mask_1x1[act_idx] = mask_1x1 
         else :
-            act_img_mask[act_idx] = mask 
-            act_flag[act_idx] = 0 
+            act_img_mask_3x3[act_idx] = mask_3x3 
+            act_img_mask_1x1[act_idx] = mask_1x1 
+            #act_flag[act_idx] = 0 
     if debug:
         plt.title('masked regions of influence per actuator')
-        plt.imshow( np.sum( list(act_img_mask.values()), axis = 0 ) )
+        plt.imshow( np.sum( list(act_img_mask_3x3.values()), axis = 0 ) )
         plt.show()
 
     # turn our dictionary to a big pixel to command matrix 
-    P2C = np.array([list(act_img_mask[act_idx].reshape(-1)) for act_idx in range(Nact)])
+    P2C_1x1 = np.array([list(act_img_mask_1x1[act_idx].reshape(-1)) for act_idx in range(Nact)])
+    P2C_3x3 = np.array([list(act_img_mask_3x3[act_idx].reshape(-1)) for act_idx in range(Nact)])
 
-    # we can look at filtering a particular actuator in image P2C[i].reshape(zwfs.get_image().shape)
+    # we can look at filtering a particular actuator in image P2C_3x3[i].reshape(zwfs.get_image().shape)
     # we can also interpolate signals in 3x3 grid to if DM actuator not perfectly registered to center of pixel. 
-
-
-    # INSIDE PUPIL JUST DO MATCHED FILTER OF FPM OUT IMAGE WITH CIRCULAR PUPIL OF DIFFERENT SIZE AND CENTER 
-    # OUTSIDE PUPIL JUST INVERT P2C 0<->1 as long as subwindows are large enough to overlap with pupil. OR USE INVERSE OF INSIDE PUPIL... VARIOUS WAYS OF DOING THIS 
-
-    # argmax( |FPM_IN - FPM_OUT| ) is center of secondary obstruction  
-
-    i_sec, j_sec = np.unravel_index( np.argmax( abs(I0-N0).reshape(-1) ), I0.shape )
- 
-    # careful here, we don't know if we should take indicies above or below peak center etc..
-    # we should take 3x3 grid and 2D convolve with ones to see where peak is and take those points 
-    subgrid = abs(I0 - N0)[ i_sec - 1 : i_sec + 2, j_sec - 1 : j_sec + 2 ] # isec,jsec at center of subgrid (index = 1,1) 
-
-    conv = signal.convolve2d(subgrid, np.ones([2,2]), mode='valid')
-    di, dj = np.unravel_index( np.argmax(conv), conv.shape )
-    si_rows = [i_sec + di, i_sec + di - 1]
-    si_cols = [j_sec + dj , j_sec + dj - 1 ] 
-
-    secondary_indicies = list(itertools.product(si_rows, si_cols))
-
+    
 
 
     if debug: 
@@ -827,7 +848,35 @@ def PROCESS_BDR_RECON_DATA_INTERNAL(data, debug=True) :
 
         util.nice_heatmap_subplots( im_list , xlabel_list, ylabel_list, title_list, cbar_label_list, fontsize=15, axis_off=True, cbar_orientation = 'bottom', savefig=savefig)
 
+        # check the active region 
+        fig,ax = plt.subplots(1,1)
+        ax.imshow( util.get_DM_command_in_2D( dm_pupil_filt  ) )
+        ax.set_title('active DM region')
+        ax.grid(True, which='minor',axis='both', linestyle='-', color='k' ,lw=3)
+        ax.set_xticks( np.arange(12) - 0.5 , minor=True)
+        ax.set_yticks( np.arange(12) - 0.5 , minor=True)
+        #plt.savefig( fig_path + f'active_DM_region_{tstamp}.png' , bbox_inches='tight', dpi=300) 
+        # check the well registered DM region : 
+        fig,ax = plt.subplots(1,1)
+        ax.imshow( util.get_DM_command_in_2D( np.sum( P2C_1x1, axis=1 )))
+        ax.set_title('well registered actuators')
+        ax.grid(True, which='minor',axis='both', linestyle='-', color='k',lw=2 )
+        ax.set_xticks( np.arange(12) - 0.5 , minor=True)
+        ax.set_yticks( np.arange(12) - 0.5 , minor=True)
+  
+        #plt.savefig( fig_path + f'poorly_registered_actuators_{tstamp}.png' , bbox_inches='tight', dpi=300) 
 
+        # check poorly registered actuators: 
+        fig,ax = plt.subplots(1,1)
+        ax.imshow( util.get_DM_command_in_2D(poor_registration_list) )
+        ax.set_title('poorly registered actuators')
+        ax.grid(True, which='minor',axis='both', linestyle='-', color='k', lw=2 )
+        ax.set_xticks( np.arange(12) - 0.5 , minor=True)
+        ax.set_yticks( np.arange(12) - 0.5 , minor=True)
+
+        #plt.savefig( fig_path + f'poorly_registered_actuators_{tstamp}.png', bbox_inches='tight', dpi=300)
+
+        plt.show() 
 
 
 # ========================== !! 3 !! =====================
@@ -838,7 +887,7 @@ def PROCESS_BDR_RECON_DATA_INTERNAL(data, debug=True) :
     param_dict = {}
     cov_dict = {}
     fit_residuals = []
-
+    nofit_list = []
     if debug:
         Nrows = np.ceil( sum( dm_pupil_filt )**0.5).astype(int)
         fig,ax = plt.subplots(Nrows,Nrows,figsize=(20,20))
@@ -847,17 +896,20 @@ def PROCESS_BDR_RECON_DATA_INTERNAL(data, debug=True) :
             aaa.axis('off')
         j=0 #axx index
 
-    mean_filtered_pupil = 1/(3*3)  * np.mean( P2C @ N0.reshape(-1) )
+    #mean_filtered_pupil = 1/(3*3)  * np.mean( P2C_3x3 @ N0.reshape(-1) )
 
     for act_idx in range(len(flat_dm_cmd)): 
-        if dm_pupil_filt[act_idx]:
+
+        #Note that if we use the P2C_3x3 we need to normalize it 1/(3*3) * P2C_3x3
+        if dm_pupil_filt[act_idx] * ( ~poor_registration_list)[act_idx]:
+
             # -- we do this with matrix multiplication using  mask_matrix
             #P_i = np.sum( act_img_mask[act_idx] * pupil ) #Flat DM with FPM OUT 
             #P_i = mean_filtered_pupil.copy() # just consider mean pupil! 
         
-            I_i = np.array( [P2C[act_idx] @ poke_imgs[i][act_idx].reshape(-1) for i in  range(len(ramp_values))] ) #np.array( [np.sum( act_img_mask[act_idx] * poke_imgs[i][act_idx] ) for i in range(len(ramp_values))] ) #spatially filtered sum of intensities per actuator cmds 
-            I_0 = 1/(3*3) * P2C[act_idx] @ I0.reshape(-1) #np.sum( act_img_mask[act_idx] * I0 ) # Flat DM with FPM IN  
-            N_0 = 1/(3*3) *P2C[act_idx] @ N0.reshape(-1) #np.sum( act_img_mask[act_idx] * N0 )
+            I_i = np.array( [P2C_1x1[act_idx] @ poke_imgs[i][act_idx].reshape(-1) for i in  range(len(ramp_values))] ) #np.array( [np.sum( act_img_mask[act_idx] * poke_imgs[i][act_idx] ) for i in range(len(ramp_values))] ) #spatially filtered sum of intensities per actuator cmds 
+            I_0 = P2C_1x1[act_idx] @ I0.reshape(-1) #np.sum( act_img_mask[act_idx] * I0 ) # Flat DM with FPM IN  
+            N_0 = P2C_1x1[act_idx] @ N0.reshape(-1) #np.sum( act_img_mask[act_idx] * N0 )
             # ================================
             #   THIS IS OUR MODEL!S=A+B*cos(F*x + mu)  
             #S = (I_i - I_0) / P_i # signal to fit!
@@ -872,44 +924,179 @@ def PROCESS_BDR_RECON_DATA_INTERNAL(data, debug=True) :
 
             initial_guess = [np.mean(S), (np.max(S)-np.min(S))/2,  15, 2.4]
             #initial_guess = [7, 2, 15, 2.4] #[0.5, 0.5, 15, 2.4]  #A_opt, B_opt, F_opt, mu_opt  ( S = A+B*cos(F*x + mu) )
-            # FIT 
-            popt, pcov = curve_fit(Ic_model_constrained, x_data, y_data, p0=initial_guess)
 
-            # Extract the optimized parameters explictly to measure residuals
-            A_opt, B_opt, F_opt, mu_opt = popt
+            try:
+                # FIT 
+                popt, pcov = curve_fit(Ic_model_constrained, x_data, y_data, p0=initial_guess)
 
-            # STORE FITS 
-            param_dict[act_idx] = popt
-            cov_dict[act_idx] = pcov 
-            # also record fit residuals 
-            fit_residuals.append( S - Ic_model_constrained(ramp_values, A_opt, B_opt, F_opt, mu_opt) )
+                # Extract the optimized parameters explictly to measure residuals
+                A_opt, B_opt, F_opt, mu_opt = popt
+
+                # STORE FITS 
+                param_dict[act_idx] = popt
+                cov_dict[act_idx] = pcov 
+                # also record fit residuals 
+                fit_residuals.append( S - Ic_model_constrained(ramp_values, A_opt, B_opt, F_opt, mu_opt) )
 
 
-            if debug: 
+                if debug: 
 
-                axx[j].plot( ramp_values, Ic_model_constrained(ramp_values, A_opt, B_opt, F_opt, mu_opt) ,label=f'fit (act{act_idx})') 
-                axx[j].plot( ramp_values, S ,label=f'measured (act{act_idx})' )
-                #axx[j].set_xlabel( 'normalized DM command')
-                #axx[j].set_ylabel( 'normalized Intensity')
-                axx[j].legend(fontsize=6)
-                #axx[j].set_title(act_idx,fontsize=5)
-                #ins = axx[j].inset_axes([0.15,0.15,0.25,0.25])
-                #ins.imshow(poke_imgs[3][act_idx] )
-                #axx[j].axis('off')
-                j+=1
-    
+                    axx[j].plot( ramp_values, Ic_model_constrained(ramp_values, A_opt, B_opt, F_opt, mu_opt) ,label=f'fit (act{act_idx})') 
+                    axx[j].plot( ramp_values, S ,label=f'measured (act{act_idx})' )
+                    #axx[j].set_xlabel( 'normalized DM command')
+                    #axx[j].set_ylabel( 'normalized Intensity')
+                    axx[j].legend(fontsize=6)
+                    #axx[j].set_title(act_idx,fontsize=5)
+                    #ins = axx[j].inset_axes([0.15,0.15,0.25,0.25])
+                    #ins.imshow(poke_imgs[3][act_idx] )
+                    #axx[j].axis('off')
+                    j+=1
+            except:
+                print(f'\n!!!!!!!!!!!!\nfit failed for actuator {act_idx}\n!!!!!!!!!!!!\nanalyse plot to try understand why')
+                nofit_list.append( act_idx ) 
+                fig1, ax1 = plt.subplots(1,1)
+                ax1.plot( ramp_values, S )
+                ax1.set_title('could not fit this!') 
+                 
+       
 
     if debug:
-        #plt.savefig( fig_path + f'cosine_interation_model_fits_ALL_{tstamp}.png' , bbox_inches='tight', dpi=500) 
+        #plt.savefig( fig_path + f'cosine_interation_model_fits_ALL_{tstamp}.png' , bbox_inches='tight', dpi=300) 
         plt.show() 
 
     if debug:
-        buffcorners = np.array( [list( param_dict.values() ) for _ in range(10)]).reshape(-1,4)
+        """ used to buff things out (adding new 0 normal noise variance to samples) 
+        Qlst,Wlst,Flst,mulst = [],[],[],[]
+        Q_est =  np.array(list( param_dict.values() ))[:, 0]
+        W_est = np.array(list( param_dict.values() ))[:, 1] 
+        F_est = np.array(list( param_dict.values() ))[:, 2]
+        mu_est = np.array(list( param_dict.values() ))[:, 3] 
+        for q,w,f,u in param_dict.values():
+            Qlst.append( list( q + 0.01*np.mean(Q_est)*np.random.randn(100 ) ) )
+            Wlst.append( list( w + 0.01*np.mean(W_est)*np.random.randn(100 ) ) )
+            Flst.append( list( f + 0.01*np.mean(F_est)*np.random.randn(100 ) ) )
+            mulst.append( list( u + 0.01*np.mean(mu_est)*np.random.randn(100 ) ) )
 
-        corner.corner( buffcorners , quantiles=[0.16,0.5,0.84], show_titles=True, labels = ['Q [adu]', 'W [adu/cos(rad)]', 'F [rad/cmd]', r'$\mu$ [rad]'], range=[(-10, 10), (0, 5), (5, 20), (-3,3)])
-
+        #buffcorners = np.array( [list( param_dict.values() ) for _ in range(10)]).reshape(-1,4)
+        buffcorners = np.array([np.array(Qlst).ravel(),np.array(Wlst).ravel(), np.array(Flst).ravel(),np.array(mulst).ravel()]).T
+        corner.corner( buffcorners , quantiles=[0.16,0.5,0.84], show_titles=True, labels = ['Q [adu]', 'W [adu/cos(rad)]', 'F [rad/cmd]', r'$\mu$ [rad]'] ) 
+        """
+        corner.corner( np.array(list( param_dict.values() )), quantiles=[0.16,0.5,0.84], show_titles=True, labels = ['Q', 'W', 'F', r'$\mu$'] , range = [(0,2*np.mean(y_data)),(0, 10*(np.max(y_data)-np.min(y_data)) ) , (5,20), (0,6) ] ) #, range = [(2*np.min(S), 102*np.max(S)), (0, 2*(np.max(S) - np.min(S)) ), (5, 20), (-3,3)] ) #['Q [adu]', 'W [adu/cos(rad)]', 'F [rad/cmd]', r'$\mu$ [rad]']
+        #plt.savefig( fig_path + f'fitted_Ic_model_parameters_corner_plot_{tstamp}.png', bbox_inches='tight', dpi=300)
         plt.show()
         
+    output_fits = fits.HDUList( [] )
+
+    # reference images 
+    N0_fits = fits.PrimaryHDU( N0 )
+    N0_fits.header.set('EXTNAME','FPM OUT REF')
+    N0_fits.header.set('WHAT IS','ref int. with FPM out')
+
+    I0_fits = fits.PrimaryHDU( I0 )
+    I0_fits.header.set('EXTNAME','FPM IN REF')
+    I0_fits.header.set('WHAT IS','ref int. with FPM in')
+
+    # output fits files 
+    P2C_fits = fits.PrimaryHDU( np.array([P2C_1x1, P2C_3x3]) )
+    P2C_fits.header.set('EXTNAME','P2C')
+    P2C_fits.header.set('WHAT IS','pixel to DM actuator register')
+    P2C_fits.header.set('index 0','P2C_1x1') 
+    P2C_fits.header.set('index 1','P2C_3x3')    
+    
+    #fitted parameters
+    param_fits = fits.PrimaryHDU( np.array(list( param_dict.values() )) )
+    param_fits.header.set('EXTNAME','FITTED_PARAMS')
+    param_fits.header.set('COL0','Q [adu]')
+    param_fits.header.set('COL1','W [adu/cos(rad)]')
+    param_fits.header.set('COL2','F [rad/cmd]')
+    param_fits.header.set('COL4','mu [rad]')
+    
+    if len(nofit_list)!=0:
+        for i, act_idx in enumerate(nofit_list):
+            param_fits.header.set(f'{i}_fit_fail_act', act_idx)
+        
+    #covariances
+    cov_fits = fits.PrimaryHDU( np.array(list(cov_dict.values())) )
+    cov_fits.header.set('EXTNAME','FIT_COV')
+    # residuals 
+    res_fits = fits.PrimaryHDU( np.array(fit_residuals) )
+    res_fits.header.set('EXTNAME','FIT_RESIDUALS')
+
+    #DM regions 
+    dm_fit_regions = fits.PrimaryHDU( np.array( [dm_pupil_filt, dm_pupil_filt*(~poor_registration_list), poor_registration_list] ).astype(int) )
+    dm_fit_regions.header.set('EXTNAME','DM_REGISTRATION_REGIONS')
+    dm_fit_regions.header.set('registration_threshold',registration_threshold)
+    dm_fit_regions.header.set('index 0 ','active_DM_region')   
+    dm_fit_regions.header.set('index 1 ','well registered actuators') 
+    dm_fit_regions.header.set('index 2 ','poor registered actuators') 
+ 
+    for f in [N0_fits, I0_fits, P2C_fits, param_fits, cov_fits,res_fits, dm_fit_regions ]:
+        output_fits.append( f ) 
+
+    if savefits!=None:
+           
+        output_fits.writeto( savefits )  #data_path + 'ZWFS_internal_calibration.fits'
+
+    return( output_fits ) 
+
+
+def twoD_Gaussian(xy, amplitude, xo, yo, sigma_x, sigma_y, theta, offset):
+    x, y = xy
+    xo = float(xo)
+    yo = float(yo)    
+    a = (np.cos(theta)**2)/(2*sigma_x**2) + (np.sin(theta)**2)/(2*sigma_y**2)
+    b = -(np.sin(2*theta))/(4*sigma_x**2) + (np.sin(2*theta))/(4*sigma_y**2)
+    c = (np.sin(theta)**2)/(2*sigma_x**2) + (np.cos(theta)**2)/(2*sigma_y**2)
+    g = offset + amplitude*np.exp( - (a*((x-xo)**2) + 2*b*(x-xo)*(y-yo)
+                            + c*((y-yo)**2)))
+    return g.ravel()
+
+
+def fit_b(I0, N0, theta, image_filter ): 
+    # fit b parameter from the reference fields I0 (FPM IN), N0 (FPM OUT) which should be 2D arrays, theta is scalar estimate of the FPM phase shift 
+    # we can use N0 to remove bias/bkg by subtraction 
+
+    x = np.linspace(-I0.shape[0]//2 , I0.shape[0]//2 ,I0.shape[0])
+    X, Y = np.meshgrid( x, x)
+    X_f=X.reshape(-1)[image_filter]
+    Y_f=Y.reshape(-1)[image_filter]
+    data = I0.reshape(-1)[image_filter] #this is M^2
+ 
+
+    initial_guess = (np.nanmax(data),np.mean(x),np.mean(x),np.std(x),np.std(x), 0, 0) 
+
+    # fit it 
+    popt, pcov = scipy.optimize.curve_fit(twoD_Gaussian, (X_f, Y_f), data, p0=initial_guess)
+
+    data_fitted = twoD_Gaussian((X, Y), *popt) / np.mean(I0.reshape(-1)[image_filter])
+
+    # fitted b in pixel space
+    bfit = data_fitted.reshape(X.shape)**0.5 / (2*(1-np.cos(theta)))**0.5
+
+    im_list = [I0 * image_filter.reshape(I0.shape), bfit]
+    xlabel_list = ['','']
+    ylabel_list = ['','']
+    title_list = ['','']
+    cbar_label_list = ['[adu]', 'b'] 
+    savefig = fig_path + 'b_fit_internal_cal.png'
+
+    util.nice_heatmap_subplots( im_list , xlabel_list, ylabel_list, title_list,cbar_label_list, fontsize=15, cbar_orientation = 'bottom', axis_off=True, savefig=savefig)
+
+    # fitted b in DM space - how to best put this on DM 
+    bfit_dm = P2C_1x1 @ bfit.reshape(-1) 
+    #issue of not full P2C across DM range
+    plt.imshow( util.get_DM_command_in_2D( bfit_dm ) );plt.colorbar();plt.show()
+
+    return(bfit_pixels, bfit_dm) 
+
+image_filter = pupil_report['reference_field_peak_filter'] | pupil_report['outside_pupil_pixel_filter']
+
+
+
+
+
+
+    """
     # get an estimate for things that should not ideally have spatial variability
     _, _, F_est, mu_est = np.median( list( param_dict.values() ) ,axis = 0)
 
@@ -941,9 +1128,8 @@ def PROCESS_BDR_RECON_DATA_INTERNAL(data, debug=True) :
     plt.figure()
     plt.imshow( util.get_DM_command_in_2D( bsamples )); plt.colorbar()
     plt.show()
-    
+    """
 
-    data
 
 
 

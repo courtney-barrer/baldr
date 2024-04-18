@@ -267,10 +267,19 @@ class ZWFS():
     def update_reference_regions_in_img(self, pupil_report ):
        
         self.pupil_pixel_filter = pupil_report['pupil_pixel_filter']
+        self.secondary_pixel_filter = pupil_report['secondary_pupil_pixel_filter']
+        self.outside_pixel_filter = pupil_report['outside_pupil_pixel_filter']
+        self.refpeak_pixel_filter = pupil_report['reference_field_peak_filter']
+
         self.pupil_pixels = pupil_report['pupil_pixels']  
+        self.secondary_pixels = pupil_report['secondary_pupil_pixels']
+        self.outside_pixels = pupil_report['outside_pupil_pixels']
+        self.refpeak_pixels = pupil_report['reference_field_peak_pixels']
+
+
         self.pupil_center_ref_pixels = pupil_report['pupil_center_ref_pixels']
         self.dm_center_ref_pixels = pupil_report['dm_center_ref_pixels']
-       
-    
-       
+        self.secondary_center_ref_pixels =  report['secondary_center_ref_pixels']
+
+
        

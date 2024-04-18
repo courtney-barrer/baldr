@@ -29,7 +29,7 @@ class phase_controller_1():
            
             self.ctrl_parameters = {} # empty dictionary cause we have none
             #for tel in self.config['telescopes']:
-            self.config['active_actuator_indicies'] = range(140) # all of them
+            
             self.config['Kp'] = [0 for _ in range( self.config['number_of_controlled_modes'] )] # proportional gains
             self.config['Ki'] = [0 for _ in range( self.config['number_of_controlled_modes'] )] # integral gains
 
@@ -45,11 +45,17 @@ class phase_controller_1():
                            Nx_act_basis = self.config['dm_control_diameter'],\
                                act_offset= self.config['dm_control_center'], without_piston=True) # cmd = M2C @ mode_vector, i.e. mode to command matrix
            
-            self.config['M2C'] = M2C
+            self.config['M2C'] = M2C # 
                 #self.config[tel]['control_parameters'] = [] # empty list cause we have none
+            self.config['active_actuator_filter'] = (abs(np.sum( self.config['M2C'], axis=1 )) > 0 ).astype(bool)
+           
+
+            self.config['active_actuator_indicies'] = np.where( abs(np.sum( self.config['M2C'], axis=1 )) > 0 )[0]
+             
+#plt.imshow( util.get_DM_command_in_2D( abs(np.sum( phase_ctrl.config['M2C'], axis=1 )) > 0 ) ); plt.show() #<-this can be used to check the actuator filter makes sense. 
+
         else:
             raise TypeError( 'config_file type is wrong. It must be None or a string indicating the config file to read in' )
-
 
 
     def change_control_basis_parameters(self,  number_of_controlled_modes, basis_name ,dm_control_diameter=None, dm_control_center=None,controller_label=None):

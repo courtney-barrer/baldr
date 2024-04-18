@@ -1,10 +1,15 @@
 import time 
 import numpy as np 
 import matplotlib.pyplot as plt
+from scipy import signal
+import itertools
+import aotools
+from matplotlib import colors
+
 from . import utilities as util 
 from . import hardware 
 
-figure_path = '/home/baldr/Documents/baldr/ANU_demo_scripts/ANU_data/'
+fig_path = '/home/baldr/Documents/baldr/ANU_demo_scripts/BALDR/figures/' 
 
 class pupil_controller_1():
     """
@@ -85,7 +90,7 @@ class pupil_controller_1():
 
         
 
-def analyse_pupil_openloop( zwfs, debug = True, return_report = True):
+def analyse_pupil_openloop( zwfs, debug = True, return_report = True, symmetric_pupil=True):
     # want to get DM center, also P2C matrix (pixel to command registration matrix), could return teo - one with only one pixel per cmd, another with 9 pixels per command to look at surrounding region. pixel indicies where pupil defined, could check len(pixel indicies)
     
     
@@ -95,6 +100,7 @@ def analyse_pupil_openloop( zwfs, debug = True, return_report = True):
     #P2C_1 
     #P2C_2 
 
+ 
     report = {} # initialize empty dictionary for report
 
     #rows, columns to crop
@@ -109,21 +115,74 @@ def analyse_pupil_openloop( zwfs, debug = True, return_report = True):
     # make sure phase mask is OUT !!!! 
     hardware.set_phasemask( phasemask = 'out' ) # no motors to implement this on yet, so does nothing 
 
+
+    zwfs.send_cmd(zwfs.dm_shapes['flat_dm'])
+
+    _ = input('MANUALLY MOVE PHASE MASK OUT OF BEAM, PRESS ENTER TO BEGIN' )
+    util.watch_camera(zwfs, frames_to_watch = 50, time_between_frames=0.05) 
+
+    
     # simple idea: we are clearly going to have 2 modes in distribution of pixel intensity, one centered around the mean pupil intensity where illuminated, and another centered around the "out of pupil" region which will be detector noise / scattered light. np.histogram in default setup automatically calculates bins that incoorporate the range and resolution of data. Take the median frequency it returns (which is an intensity value) and set this as the pupil intensity threshold filter. This should be roughly between the two distributions.
 
-    img = zwfs.get_image().astype(int) #[r1: r2, c1: c2] <- we made zwfs automatically crop 
-    density, intensity_edges  = np.histogram( img.reshape(-1) )
-    intensity_threshold =  np.median( intensity_edges )
+    X, Y = np.meshgrid( zwfs.col_coords, zwfs.row_coords )
+
+    imglist = []
+    for _ in range(10):
+       imglist.append( zwfs.get_image().astype(int) )  #[r1: r2, c1: c2] <- we made zwfs automatically crop 
+       time.sleep(0.1)
+    img = np.median( imglist, axis=0)
+
+    N0 = img # set this as our reference FPM OUT image for now 
+
+    ## General Assymetric pupil
+    density, intensity_bins  = np.histogram( img.reshape(-1) )
+    intensity_threshold =  np.median( intensity_bins ) - 1.*np.std(intensity_bins) #np.median( intensity_edges ) 
 
     pupil_filter = img.reshape(-1) > intensity_threshold
-    pupil_pixels =  np.where( pupil_filter )[0]
 
-    X, Y = np.meshgrid( zwfs.col_coords, zwfs.row_coords )
     x_pupil_center, y_pupil_center = np.mean(X.reshape(-1)[pupil_filter]), np.mean(Y.reshape(-1)[pupil_filter])
+
+    #plt.figure(); plt.imshow( pupil_filter.reshape(img.shape) ); plt.show()
+
+
+    if symmetric_pupil: # we impose symmetry constraints  
+        ## symmetric pupil
+        collapsed_pupil_x = np.sum(img, axis=0)
+        collapsed_pupil_y = np.sum(img, axis=1)
+        #plt.figure(); plt.plot( collapsed_pupil_x); plt.show()
+        density, intensity_bins  = np.histogram( list(collapsed_pupil_x) + list(collapsed_pupil_y)  )
+        intensity_threshold =  np.median( intensity_bins ) - 1*np.std(intensity_bins) 
+        diam_filter_x = collapsed_pupil_x > intensity_threshold
+        diam_filter_y = collapsed_pupil_y > intensity_threshold
+
+        pupil_diam_x = np.sum( diam_filter_x )
+        pupil_diam_y = np.sum( diam_filter_y )
+        pupil_diam = 0.5*(pupil_diam_x+pupil_diam_y) 
+
+        # Note we could also make a square pupil region with this which could be easier to visualize svd modes 
+        inside_pup = aotools.functions.pupil.circle(radius=pupil_diam//2, size=img.shape[0], circle_centre=(x_pupil_center, y_pupil_center), origin='middle')
+
+        # do a tight one to really only capture inner regions and not edges 
+        inside_pup_tight = aotools.functions.pupil.circle(radius=int( 0.5*pupil_diam//2), size=img.shape[0], circle_centre=(x_pupil_center, y_pupil_center), origin='middle')
+
+        #debug
+        #fig,ax = plt.subplots(1,2)
+        #ax[0].imshow( inside_pup.reshape(img.shape) ); ax[1].imshow( img); plt.show()
+        #plt.figure();plt.imshow( inside_pup.reshape(img.shape), alpha=0.5); plt.imshow( img,alpha=0.5); plt.show()
+
+        # do a tight one to really only capture inner regions and not edges 
+        pupil_filter_tight = ( inside_pup_tight > 0 ).reshape(-1)
+
+        pupil_filter  = ( inside_pup > 0 ).reshape(-1)
+
+    
+    pupil_pixels =  np.where( pupil_filter )[0]
 
     #================================
     #============= Add to report card 
     report['pupil_pixel_filter'] = pupil_filter # within the cropped img frame based on zwfs.pupil_crop_region
+    report['pupil_pixel_filter_tight'] = pupil_filter_tight # within the cropped img frame based on zwfs.pupil_crop_region
+
     report['pupil_pixels'] = pupil_pixels # within the cropped img frame based on zwfs.pupil_crop_region
     report['pupil_center_ref_pixels'] = ( x_pupil_center, y_pupil_center ) # within the cropped img frame based on zwfs.pupil_crop_region
 
@@ -136,6 +195,7 @@ def analyse_pupil_openloop( zwfs, debug = True, return_report = True):
         for axx in ax.reshape(-1):
             axx.axvline(x_pupil_center,color='r',label='measured center')
             axx.axhline(y_pupil_center,color='r')
+        #plt.savefig(fig_path + '1.1_centers_FPM-OFF_internal_source.png',bbox_inches='tight', dpi=300)
         plt.legend() 
 
     #================================
@@ -144,6 +204,21 @@ def analyse_pupil_openloop( zwfs, debug = True, return_report = True):
     # make sure phase mask is IN !!!! 
     hardware.set_phasemask( phasemask = 'posX' ) # no motors to implement this on yet, so does nothing 
 
+    zwfs.send_cmd(zwfs.dm_shapes['flat_dm'])
+
+    _ = input('MANUALLY MOVE PHASE MASK INTO BEAM, PRESS ENTER TO BEGIN' )
+    util.watch_camera(zwfs, frames_to_watch = 50, time_between_frames=0.05) 
+
+    # now we get a reference I0 intensity 
+    imglist = []
+    for _ in range(10):
+       imglist.append( zwfs.get_image().astype(int) )  #[r1: r2, c1: c2] <- we made zwfs automatically crop 
+       time.sleep(0.1)
+    img = np.median( imglist, axis=0)
+    I0 = img # set this as reference FPM IN intensity 
+
+
+    #now add shape on DM to infer centers
     amp = 0.1
     delta_img_list = [] # hold our images, which we will take median of 
     for _ in range(10): # get median of 10 images 
@@ -208,7 +283,8 @@ def analyse_pupil_openloop( zwfs, debug = True, return_report = True):
         plt.ylabel('y [pixels]',fontsize=15)
         plt.gca().tick_params(labelsize=15) 
         plt.tight_layout()
-        #plt.savefig(figure_path + 'process_1.3_analyse_pupil_DM_center.png',dpi=300) 
+        #plt.savefig(fig_path + 'process_1.3_analyse_pupil_DM_center.png',bbox_inches='tight', dpi=300)
+ 
         plt.show() 
 
     #================================
@@ -216,6 +292,104 @@ def analyse_pupil_openloop( zwfs, debug = True, return_report = True):
 
     report['dm_center_ref_pixels'] = x_dm_center, y_dm_center
 
+    #================================
+    #============= Get secondary obstruction and outside pupil filters
+
+
+    #===  secondary obstruction pupil filter
+    # use the tight pupil filter so we don't capture outside edges in our filtering
+    _, pupil_intensity_bins  = np.histogram( N0.reshape(-1)[pupil_filter_tight] )
+    intensity_threshold =  np.median( pupil_intensity_bins ) - 1.*np.std( pupil_intensity_bins ) #np.median( intensity_edges ) 
+
+    secondary_pupil_filter_subspace = N0.reshape(-1)[pupil_filter_tight] < intensity_threshold
+    #we have to insert this back into main image grid now (since we filtered on the inside pupil subspace)
+    secondary_pupil_filter = np.zeros(N0.shape).astype(bool)
+    secondary_pupil_filter.reshape(-1)[pupil_filter_tight] = secondary_pupil_filter_subspace #Note: this is still be 2D array 
+
+
+
+    x_sec_pupil_center, y_sec_pupil_center = np.mean(X.reshape(-1)[secondary_pupil_filter.reshape(-1)]), np.mean(Y.reshape(-1)[secondary_pupil_filter.reshape(-1)])
+
+    if symmetric_pupil: 
+        # we force secondary_pupil_filter to be circle 
+        secondary_diam = np.sum( 0 < np.sum(secondary_pupil_filter,axis=0) )  
+
+        secondary_pupil_filter = aotools.functions.pupil.circle(radius=secondary_diam//2, size=N0.shape[0], circle_centre=(x_sec_pupil_center, y_sec_pupil_center), origin='middle').astype(bool)
+
+
+    secondary_pupil_filter = secondary_pupil_filter.reshape(-1) #make sure its flattened
+
+    secondary_pupil_pixels =  np.where( secondary_pupil_filter )[0]
+
+    #plt.figure();plt.imshow( N0 );plt.imshow( secondary_pupil_filter.reshape(N0.shape), alpha=0.2, label='secondary_obstruction_filter');plt.legend();  plt.savefig(fig_path + 'process_1.3_secondary_filter.png',bbox_inches='tight', dpi=300); plt.show()
+
+
+    #===  outside filter
+    outside_pupil_filter  = ~pupil_filter 
+    outside_pupil_pixels =  np.where( outside_pupil_filter )[0]
+
+    #plt.figure();plt.imshow( outside_pupil_filter.reshape(N0.shape), alpha=0.5); plt.imshow( N0,alpha=0.5); plt.show()
+
+    #===  reference field peak  
+    #get indicies where I0-N0 is maximum - this corresponds to peak of M^2 = |psi_r|^2 reference field. This can be used for fitting 'b' along with outside pupil intensities. Also a health check that this matches the center of the found secondary obstruction.. If not this could indicate mis-alignment of the focal plane phase mask or bad aberrations in the system.    
+    i_sec, j_sec = np.unravel_index( np.argmax( abs(I0-N0).reshape(-1) ), I0.shape )
+ 
+    # careful here, we don't know if we should take indicies above or below peak center etc..
+    # we should take 3x3 grid and 2D convolve with ones to see where peak is and take those points 
+    subgrid = abs(I0 - N0)[ i_sec - 1 : i_sec + 2, j_sec - 1 : j_sec + 2 ] # isec,jsec at center of subgrid (index = 1,1) 
+
+    conv = signal.convolve2d(subgrid, np.ones([2,2]), mode='valid')
+    di, dj = np.unravel_index( np.argmax(conv), conv.shape )
+    si_rows = [i_sec + di, i_sec + di - 1]
+    si_cols = [j_sec + dj , j_sec + dj - 1 ] 
+
+    peak_ref_field_indicies = list(itertools.product(si_rows, si_cols))
+
+    ref_field_peak_pupil_filter = np.zeros(N0.shape).astype(bool)
+    for i,j in peak_ref_field_indicies :
+        ref_field_peak_pupil_filter[i,j] = True
+
+    ref_field_peak_pupil_filter = ref_field_peak_pupil_filter.reshape(-1) 
+
+    ref_field_peak_pupil_pixels =  np.where( ref_field_peak_pupil_filter )[0]
+
+    #plt.figure();plt.imshow( ref_field_peak_pupil_filter.reshape(N0.shape), alpha=0.5); plt.imshow( N0,alpha=0.5); plt.show()
+
+    #================================
+    #============= Add to report card 
+
+    #================================
+    #============= Add to report card 
+    report['secondary_pupil_pixel_filter'] = secondary_pupil_filter # within the cropped img frame based on zwfs.pupil_crop_region
+    report['secondary_pupil_pixels'] = secondary_pupil_pixels # within the cropped img frame based on zwfs.pupil_crop_region
+    report['secondary_center_ref_pixels'] = ( x_sec_pupil_center, y_sec_pupil_center  ) # within the cropped img frame based on zwfs.pupil_crop_region
+
+    report['outside_pupil_pixel_filter'] = outside_pupil_filter # within the cropped img frame based on zwfs.pupil_crop_region
+    report['outside_pupil_pixels'] = outside_pupil_pixels # within the cropped img frame based on zwfs.pupil_crop_region
+
+    # this is important for fitting b parameter as long as this reference point lies within secondary obstruction 
+    report['reference_field_peak_filter'] = ref_field_peak_pupil_filter
+    
+    report['reference_field_peak_pixels'] = ref_field_peak_pupil_pixels
+
+    if debug:
+
+        cmap = colors.ListedColormap(['black', 'green','blue','yellow'])
+
+        norm = colors.BoundaryNorm([0.5,1.5,2.5,3.5], cmap.N)
+
+        region_highlight = np.zeros( N0.shape )
+        region_highlight[pupil_filter.reshape(N0.shape)]=1
+        region_highlight[secondary_pupil_filter.reshape(N0.shape)]=2
+        region_highlight[outside_pupil_filter.reshape(N0.shape)]=0
+        region_highlight[ref_field_peak_pupil_filter.reshape(N0.shape)]=3
+
+        fig,ax = plt.subplots(figsize=(8,8))
+        #plt.axis('off')
+        cax = ax.imshow( region_highlight ,cmap=cmap)
+        cbar=fig.colorbar(cax, ticks=[0, 1, 2, 3])
+        cbar.ax.set_yticklabels(['outside pupil', 'inside pupil', 'secondary obstruction', 'peak of the reference field'])
+        #plt.savefig(fig_path + 'process_1.3_pupil_region_classification.png',bbox_inches='tight', dpi=300)
 
     #================================
     #============= Now some basic quality checks 
