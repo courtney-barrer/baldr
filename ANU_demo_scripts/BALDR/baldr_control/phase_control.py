@@ -35,8 +35,18 @@ class phase_controller_1():
 
             self.config['dm_control_diameter'] = 12 # diameter (actuators) of active actuators
             self.config['dm_control_center'] = [0,0] # in-case of mis-alignments we can offset control basis on DM
-            self.I0 = None #reference intensity over defined pupil with FPM IN 
-            self.N0 = None #reference intensity over defined pupil with FPM OUT 
+            self.I0 = None #reference intensity filtered over defined pupil with FPM IN (1D array)
+            self.N0 = None #reference intensity filtered over defined pupil with FPM OUT (1D array)
+            self.I0_2D = None # reference intensity with FPM IN without filtering (2D array)
+            self.N0_2D = None # reference intensity with FPM OUT without filtering (2D array)
+            self.b = None #ZWFS gain in pixel space filtered over defined pupil - needs to be calculated with I0, N0 measurement 
+            self.b_2D = None #ZWFS gain in pixel space filtered over defined pupil - needs to be calculated with I0, N0 measurement 
+
+            self.theta = 3.14/180 * 110 # (radian) phase shift of phase mask 
+            self.FPM_diam = 49e-6 # (m) - focal plane mask dot diameter 
+            self.FPM_depth = 0.932e-6 # (m) - focal plane mask dot diameter 
+            self.fratio = 21.2 # focal length / D of ZWFS.
+            self.wvl0 = 1.29e-6 # (m) - central wavelength of system (default is center of SLS202 L/M thermal source measured in CRED3 detector)           
 
             # mode to command matrix
             M2C = util.construct_command_basis( basis=self.config['basis'] , \
@@ -138,42 +148,49 @@ class phase_controller_1():
         
         # remember that ZWFS.get_image automatically crops at corners ZWFS.pupil_crop_region
         ZWFS.states['busy'] = 1
+        update_references = int( input('get new reference intensities (1/0)') )
+       
+        if update_references | ( (self.I0==None) | (self.N0==None) ):
+
+            imgs_to_median = 10 # how many images do we take the median of to build signal the reference signals 
+            # check other states match such as source etc
         
-        imgs_to_median = 10 # how many images do we take the median of to build signal the reference signals 
-        # check other states match such as source etc
+            # =========== PHASE MASK OUT 
+            hardware.set_phasemask( phasemask = 'out' ) # THIS DOES NOTHING SINCE DONT HAVE MOTORS YET.. for now we just look at the pupil so we can manually move phase mask in and out. 
+            _ = input('MANUALLY MOVE PHASE MASK OUT OF BEAM, PRESS ANY KEY TO BEGIN' )
+            util.watch_camera(ZWFS, frames_to_watch = 50, time_between_frames=0.05)
 
-        # =========== PHASE MASK OUT 
-        hardware.set_phasemask( phasemask = 'out' ) # THIS DOES NOTHING SINCE DONT HAVE MOTORS YET.. for now we just look at the pupil so we can manually move phase mask in and out. 
-        _ = input('MANUALLY MOVE PHASE MASK OUT OF BEAM, PRESS ANY KEY TO BEGIN' )
-        util.watch_camera(ZWFS, frames_to_watch = 50, time_between_frames=0.05)
+            ZWFS.states['fpm'] = 0
+    
+            N0_list = []
+            for _ in range(imgs_to_median):
+                N0_list.append( ZWFS.get_image(  ) ) #REFERENCE INTENSITY WITH FPM IN
+            N0 = np.median( N0_list, axis = 0 ) 
+            #put self.config['fpm'] phasemask on-axis (for now I only have manual adjustment)
 
-        ZWFS.states['fpm'] = 0
+            # =========== PHASE MASK IN 
+            hardware.set_phasemask( phasemask = 'posX' ) # # THIS DOES NOTHING SINCE DONT HAVE MOTORS YET.. for now we just look at the pupil so we can manually move phase mask in and out. 
+            _ = input('MANUALLY MOVE PHASE MASK BACK IN, PRESS ANY KEY TO BEGIN' )
+            util.watch_camera(ZWFS, frames_to_watch = 50, time_between_frames=0.05)
 
-        N0_list = []
-        for _ in range(imgs_to_median):
-            N0_list.append( ZWFS.get_image(  ) ) #REFERENCE INTENSITY WITH FPM IN
-        N0 = np.median( N0_list, axis = 0 ) 
-        #put self.config['fpm'] phasemask on-axis (for now I only have manual adjustment)
+            ZWFS.states['fpm'] = self.config['fpm']
 
-        # =========== PHASE MASK IN 
-        hardware.set_phasemask( phasemask = 'posX' ) # # THIS DOES NOTHING SINCE DONT HAVE MOTORS YET.. for now we just look at the pupil so we can manually move phase mask in and out. 
-        _ = input('MANUALLY MOVE PHASE MASK BACK IN, PRESS ANY KEY TO BEGIN' )
-        util.watch_camera(ZWFS, frames_to_watch = 50, time_between_frames=0.05)
-
-        ZWFS.states['fpm'] = self.config['fpm']
-
-        I0_list = []
-        for _ in range(imgs_to_median):
-            I0_list.append( ZWFS.get_image(  ) ) #REFERENCE INTENSITY WITH FPM IN
-        I0 = np.median( I0_list, axis = 0 ) 
+            I0_list = []
+            for _ in range(imgs_to_median):
+                I0_list.append( ZWFS.get_image(  ) ) #REFERENCE INTENSITY WITH FPM IN
+            I0 = np.median( I0_list, axis = 0 ) 
         
-        # === ADD ATTRIBUTES 
-        self.I0 = I0.reshape(-1)[np.array( ZWFS.pupil_pixels )] # append reference intensity over defined pupil with FPM IN 
-        self.N0 = N0.reshape(-1)[np.array( ZWFS.pupil_pixels )] # append reference intensity over defined pupil with FPM OUT 
+            # === ADD ATTRIBUTES 
+            self.I0 = I0.reshape(-1)[np.array( ZWFS.pupil_pixels )] # append reference intensity over defined     pupil with FPM IN 
+            self.N0 = N0.reshape(-1)[np.array( ZWFS.pupil_pixels )] # append reference intensity over defined pupil with FPM OUT 
 
-        # === also add the unfiltered so we can plot and see them easily on square grid after 
-        self.I0_2D = I0 # 2D array (not filtered by pupil pixel filter)  
-        self.N0_2D = N0 # 2D array (not filtered by pupil pixel filter)  
+            # === also add the unfiltered so we can plot and see them easily on square grid after 
+            self.I0_2D = I0 # 2D array (not filtered by pupil pixel filter)  
+            self.N0_2D = N0 # 2D array (not filtered by pupil pixel filter)
+
+        #  also update b attribute in phase controller
+        self.update_b( ZWFS, self.I0_2D, self.N0_2D )
+        
 
         modal_basis = self.config['M2C'].copy().T # more readable
         IM=[] # init our raw interaction matrix 
@@ -256,6 +273,20 @@ class phase_controller_1():
             plt.show()
 
 
+    def update_b( self, ZWFS, I0_2D, N0_2D ):
+        #I0 = reference image with FPM in (2D array - CANNOT be flatttened 1D array)
+        #N0 = reference image with FPM out (2D array - CANNOT be flatttened 1D array)
+        # even though I0_2D, N0_2D is attribute in self we allow user to specify new ones to update b
+        image_filter = ZWFS.refpeak_pixel_filter | ZWFS.outside_pixel_filter
+
+        b_pixel_space = util.fit_b_pixel_space(I0_2D, N0_2D, self.theta, image_filter , debug=False)
+        # full fit over ZWFS image 
+        self.b_2D =  b_pixel_space
+        #flattened and filtered in pupil space 
+        self.b = b_pixel_space.reshape(-1)[np.array( ZWFS.pupil_pixels )] 
+
+
+
 
     def get_img_err( self , img ):
         # input img has to be flattened and filtered in pupil region 
@@ -264,7 +295,8 @@ class phase_controller_1():
         # !NOTE! we take median of pupil reference intensity with FPM out (self.N0)
         # we do this cause we're lazy and do not want to manually adjust FPM every iteration (we dont have motors here) 
         # real system prob does not want to do this and normalize pixel wise. 
-        errsig =  np.array( ( (img - self.I0) / np.median( self.N0 ) ) )
+        #errsig =  np.array( ( (img - self.I0) / np.median( self.N0 ) ) )
+        errsig =  np.array( ( (img - self.I0) / (2 * self.b * np.sin( self.theta ) ) ) )
         return(  errsig )
 
 
@@ -342,11 +374,11 @@ class phase_controller_1():
 
     def control_phase(self, img, controller_name ):
         # look for active ctrl_parameters, return label
-       
-        cmd = img @ self.ctrl_parameters[controller_name]['CM'] 
+        im_err = self.get_img_err( img )
+        cmd = im_err @ self.ctrl_parameters[controller_name]['CM'] 
        
         return( cmd )
-        # get
+
 
 
 

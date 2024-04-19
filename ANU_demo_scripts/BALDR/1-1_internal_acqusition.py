@@ -7,7 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt 
 import time 
 import datetime
-
+from astropy.io import fits
 
 fig_path = '/home/baldr/Documents/baldr/ANU_demo_scripts/BALDR/figures/' 
 data_path = '/home/baldr/Documents/baldr/ANU_demo_scripts/BALDR/data/' 
@@ -42,7 +42,7 @@ zwfs.start_camera()
 phase_ctrl = phase_control.phase_controller_1(config_file = None) 
 
 # have a look at one of the modes on the DM. Modes are normalized in cmd space <m|m> = 1
-if debug:
+if 0:
     mode_indx = 0
     plt.figure() 
     plt.imshow( util.get_DM_command_in_2D(phase_ctrl.config['M2C'].T[mode_indx],Nx_act=12))
@@ -93,10 +93,26 @@ if debug:
 
 # 1.22) fit data internally (influence functions, b etc) 
 # use baldr.
-recon_data = util.GET_BDR_RECON_DATA_INTERNAL(zwfs, number_amp_samples = 18, amp_max = 0.2, number_images_recorded_per_cmd = 2, save_fits = data_path+f'recon_data_{tstamp}.fits') 
+#recon_data = util.GET_BDR_RECON_DATA_INTERNAL(zwfs, number_amp_samples = 18, amp_max = 0.2, number_images_recorded_per_cmd = 2, save_fits = data_path+f'recon_data_LARGE_SECONDARY_{tstamp}.fits') 
+recon_data = fits.open( data_path+'recon_data_LARGE_SECONDARY_19-04-2024T12.19.22.fits' )
 
 # process recon data to get a bunch of fits, DM actuator to pupil registration etc
-internal_cal_fits =  util.PROCESS_BDR_RECON_DATA_INTERNAL(recon_data ,active_dm_actuator_filter=phase_ctrl.config['active_actuator_filter'], debug=True, savefits=None  )
+internal_cal_fits =  util.PROCESS_BDR_RECON_DATA_INTERNAL(recon_data ,active_dm_actuator_filter=phase_ctrl.config['active_actuator_filter'], debug=True, savefits=data_path + f'processed_recon_data_{tstamp}.fits'  )
+
+# from internal_cal_fits we can calculate and update phase_ctrl.theta 
+#I0 = recon_data['FPM_IN'].data
+#N0 = recon_data['FPM_OUT'].data
+#theta = 2.1
+#image_filter = zwfs.refpeak_pixel_filter | zwfs.outside_pixel_filter
+
+# plt.figure(); plt.imshow( image_filter.reshape(I0.shape) );plt.show()
+
+#b_pixel_space = util.fit_b_pixel_space(I0, N0, theta, image_filter , debug=True)
+
+#b_cmd_space = util.put_b_in_cmd_space( b_pixel_space, zwfs )
+
+
+# then this should be appened to phase controller -> method with inputs of internal cal fits or    
 
 # 1.3) builds our control model with the zwfs
 #control_model_report
@@ -109,7 +125,6 @@ phase_ctrl.build_control_model( zwfs , poke_amp = -0.15, label=ctrl_method_label
 zwfs.dm.send_data( zwfs.dm_shapes['flat_dm'] )
 
 
-
 #update to WFS_Eigenmodes modes (DM modes that diagonalize the systems interaction matrix) 
 phase_ctrl.change_control_basis_parameters( controller_label = ctrl_method_label, number_of_controlled_modes=phase_ctrl.config['number_of_controlled_modes'], basis_name='WFS_Eigenmodes' , dm_control_diameter=None, dm_control_center=None)
 
@@ -120,6 +135,9 @@ plt.figure()
 plt.imshow( util.get_DM_command_in_2D( phase_ctrl.config['M2C'].T[2] ) );plt.show()
 
 if debug: 
+    # check b 
+    #plt.imshow( phase_ctrl.b_2D);plt.colorbar();plt.show()
+
     # put a mode on DM and reconstruct it with our CM 
     amp = -0.15
     mode_indx = 11

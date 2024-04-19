@@ -132,14 +132,36 @@ class ZWFS():
         as input to zwfs.update_reference_regions_in_img( report ).
         This has to be updated before any controller can be applied!
         """
+
+        #boolean filters for reference regions 
         self.pupil_pixel_filter = [np.nan]
-        self.pupil_pixels = [np.nan]
-        self.pupil_center_ref_pixels = (np.nan, np.nan) 
-        self.dm_center_ref_pixels = (np.nan, np.nan) 
+        self.secondary_pixel_filter = [np.nan]
+        self.outside_pixel_filter = [np.nan]
+        self.refpeak_pixel_filter = [np.nan]
+        # pixels in reference regions  
+        self.pupil_pixels = [np.nan]  
+        self.secondary_pixels = [np.nan]
+        self.outside_pixels = [np.nan]
+        self.refpeak_pixels = [np.nan]
+        # reference centers 
+        self.pupil_center_ref_pixels = (np.nan, np.nan)
+        self.dm_center_ref_pixels = (np.nan, np.nan)
+        self.secondary_center_ref_pixels =  (np.nan, np.nan)
+
+        # DM coordinates in pixel space relative to self.row_coords, self.col_coords
+        self.dm_col_coordinates_in_pixels = [np.nan]
+        self.dm_row_coordinates_in_pixels = [np.nan]
+
+        # Note this is duplicated in phase_control object... need to decide where best to keep it! 
+        # both pupil and phase controllers need this reference - so maybe best here?
+        self.N0   =  None #2D array of intensity when FPM OUT 
+        self.I0   =  None #2D array of intensity when FPM IN 
+
 
         # ========== CONTROLLERS
         self.phase_controllers = [] # initiate with no controllers
         self.pupil_controllers = [] # initiate with no controllers
+
         # ========== STATES
         """
         Notes:
@@ -276,10 +298,17 @@ class ZWFS():
         self.outside_pixels = pupil_report['outside_pupil_pixels']
         self.refpeak_pixels = pupil_report['reference_field_peak_pixels']
 
-
         self.pupil_center_ref_pixels = pupil_report['pupil_center_ref_pixels']
         self.dm_center_ref_pixels = pupil_report['dm_center_ref_pixels']
-        self.secondary_center_ref_pixels =  report['secondary_center_ref_pixels']
+        self.secondary_center_ref_pixels =  pupil_report['secondary_center_ref_pixels']
+
+        # DM coordinates in pixel space relative to self.row_coords, self.col_coords
+        self.dm_col_coordinates_in_pixels = pupil_report['dm_x_coords_in_pixels']
+        self.dm_row_coordinates_in_pixels = pupil_report['dm_y_coords_in_pixels']
+
+        # Note this is duplicated in phase_control object... need to decide where best to keep it! 
+        self.N0   =  pupil_report['N0'] #2D array of intensity when FPM OUT 
+        self.I0   =  pupil_report['I0'] #2D array of intensity when FPM IN 
 
 
        

@@ -91,14 +91,10 @@ class pupil_controller_1():
         
 
 def analyse_pupil_openloop( zwfs, debug = True, return_report = True, symmetric_pupil=True):
-    # want to get DM center, also P2C matrix (pixel to command registration matrix), could return teo - one with only one pixel per cmd, another with 9 pixels per command to look at surrounding region. pixel indicies where pupil defined, could check len(pixel indicies)
+    """
     
-    
-
-    #demodulation of a closer waffle, split image in quadrants, get x,y of four peaks, find intercept between them 
-
-    #P2C_1 
-    #P2C_2 
+    DM_torre_actuator_seperation is hard coded and should ALWAYS match the real seperation on  zwfs.dm_shapes['four_torres_2'] 
+    """
 
  
     report = {} # initialize empty dictionary for report
@@ -106,14 +102,20 @@ def analyse_pupil_openloop( zwfs, debug = True, return_report = True, symmetric_
     #rows, columns to crop
     r1, r2, c1, c2 = zwfs.pupil_crop_region
 
-
     # check if camera is running
+    # Shape for finding DM center in pixel space and DM coordinates in pixel space.
+    calibration_shape = 'four_torres_2' # this pokes four inner corners of the DM 
+   
+    # putting the calibration command in 2D
+    torres_shape_2D = util.get_DM_command_in_2D(zwfs.dm_shapes[ calibration_shape ])
+    # get how many actuator seperations between the poking corners
+    DM_torre_actuator_seperation = np.diff( np.where( np.nansum( torres_shape_2D, axis=0))[0] )[0]
 
     #================================
     #============= Measure pupil center 
     
     # make sure phase mask is OUT !!!! 
-    hardware.set_phasemask( phasemask = 'out' ) # no motors to implement this on yet, so does nothing 
+    #hardware.set_phasemask( phasemask = 'out' ) # no motors to implement this on yet, so does nothing 
 
 
     zwfs.send_cmd(zwfs.dm_shapes['flat_dm'])
@@ -202,7 +204,7 @@ def analyse_pupil_openloop( zwfs, debug = True, return_report = True, symmetric_
     #============= Measure DM center 
 
     # make sure phase mask is IN !!!! 
-    hardware.set_phasemask( phasemask = 'posX' ) # no motors to implement this on yet, so does nothing 
+    #hardware.set_phasemask( phasemask = 'posX' ) # no motors to implement this on yet, so does nothing 
 
     zwfs.send_cmd(zwfs.dm_shapes['flat_dm'])
 
@@ -223,11 +225,11 @@ def analyse_pupil_openloop( zwfs, debug = True, return_report = True, symmetric_
     delta_img_list = [] # hold our images, which we will take median of 
     for _ in range(10): # get median of 10 images 
         #push DM corner actuators & get image 
-        zwfs.send_cmd(zwfs.dm_shapes['flat_dm'] + amp * zwfs.dm_shapes['four_torres_2'] ) 
+        zwfs.send_cmd(zwfs.dm_shapes['flat_dm'] + amp * zwfs.dm_shapes[calibration_shape] ) 
         time.sleep(0.003)
         img_push = zwfs.get_image().astype(int) # get_image returns uint16 which cannot be negative
         #pull DM corner actuators & get image 
-        zwfs.send_cmd(zwfs.dm_shapes['flat_dm'] - amp * zwfs.dm_shapes['four_torres_2'] ) 
+        zwfs.send_cmd(zwfs.dm_shapes['flat_dm'] - amp * zwfs.dm_shapes[calibration_shape] ) 
         time.sleep(0.003)
         img_pull = zwfs.get_image().astype(int) # get_image returns uint16 which cannot be negative
         
@@ -267,11 +269,23 @@ def analyse_pupil_openloop( zwfs, debug = True, return_report = True, symmetric_
     # find intersection to get centerpoint of DM in the defined cropped region coordinates 
     x_dm_center, y_dm_center = util.line_intersection(line1, line2)
 
+    # absolute difference in pixel space between the median of (top left col - top right col, bottom left col - bottom right col, top left row - bottom left row, bottom left row - bottom right row )
+    med_pixel_distance_between_torres = np.median( [ abs(ep[0][0] - ep[1][0]), abs(ep[3][0] - ep[1][0]), abs(ep[0][1] - ep[1][1]), abs(ep[3][1] - ep[1][1]) ] )
+
+    dx_dm =  med_pixel_distance_between_torres / DM_torre_actuator_seperation # how many pixels on camera per DM actuator 
+
+    # DM coordinates in pixel space (Note DM is 12x12 grid which is hard coded here)
+    x_dm_coord = np.linspace(x_dm_center - 6* dx_dm , x_dm_center + 6 * dx_dm, 12 )
+    y_dm_coord = np.linspace(y_dm_center - 6 * dx_dm , x_dm_center + 6 * dx_dm, 12 )
+
+
     #print('CENTERS=', x_dm_center, y_dm_center) 
 
     if debug:
+        # DM center calculation
         plt.figure()
-        plt.pcolormesh( x, y, delta_img)
+        #plt.pcolormesh( x, y, delta_img)
+        plt.imshow( delta_img, extent = [x[0],x[-1],y[0],y[-1]] )
         plt.colorbar(label='[adu]')
         xx1 = [ep[0] for ep in line1]
         yy1 = [ep[1] for ep in line1]
@@ -284,14 +298,30 @@ def analyse_pupil_openloop( zwfs, debug = True, return_report = True, symmetric_
         plt.gca().tick_params(labelsize=15) 
         plt.tight_layout()
         #plt.savefig(fig_path + 'process_1.3_analyse_pupil_DM_center.png',bbox_inches='tight', dpi=300)
- 
+
+        # DM imprint in pixel space 
+        plt.figure() 
+        plt.title('DM torre imprint in pixel space - check overlap!')
+        plt.imshow( delta_img, extent = [x[0],x[-1],y[0],y[-1]] )
+        plt.imshow( torres_shape_2D, extent = [x_dm_coord[0],x_dm_coord[-1],y_dm_coord[0],y_dm_coord[-1]] , alpha =0.5)
+        plt.xlabel('x [pixels]',fontsize=15)
+        plt.ylabel('y [pixels]',fontsize=15)
+        plt.gca().tick_params(labelsize=15) 
+        plt.tight_layout()
         plt.show() 
+
+
 
     #================================
     #============= Add to report card 
 
     report['dm_center_ref_pixels'] = x_dm_center, y_dm_center
+    
+    report['dm_x_coords_in_pixels'] = x_dm_coord
+    report['dm_y_coords_in_pixels'] = y_dm_coord
 
+    report['N0'] = N0 
+    report['I0'] = I0 
     #================================
     #============= Get secondary obstruction and outside pupil filters
 
@@ -390,7 +420,7 @@ def analyse_pupil_openloop( zwfs, debug = True, return_report = True, symmetric_
         cbar=fig.colorbar(cax, ticks=[0, 1, 2, 3])
         cbar.ax.set_yticklabels(['outside pupil', 'inside pupil', 'secondary obstruction', 'peak of the reference field'])
         #plt.savefig(fig_path + 'process_1.3_pupil_region_classification.png',bbox_inches='tight', dpi=300)
-
+        plt.show()
     #================================
     #============= Now some basic quality checks 
 

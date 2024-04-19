@@ -8,6 +8,7 @@ import time
 from astropy.io import fits 
 from scipy import ndimage
 from scipy import signal
+from scipy.interpolate import RegularGridInterpolator
 from scipy.optimize import curve_fit
 import itertools
 import corner
@@ -699,7 +700,7 @@ def Ic_model_constrained_3param(x, A,  F, mu):
 
 
 # should this be free standing or a method? ZWFS? controller? - output a report / fits file
-def PROCESS_BDR_RECON_DATA_INTERNAL(data, active_dm_actuator_filter=None, debug=True, savefits=None) :
+def PROCESS_BDR_RECON_DATA_INTERNAL(recon_data, active_dm_actuator_filter=None, debug=True, savefits=None) :
     """
     # calibration of our ZWFS: 
     # this will fit M0, b0, mu, F which can be appended to a phase_controller,
@@ -846,11 +847,11 @@ def PROCESS_BDR_RECON_DATA_INTERNAL(data, active_dm_actuator_filter=None, debug=
         cbar_label_list = [r'$\frac{|\psi_C|^2 - |\psi_A|^2}{|\psi_A|^2}$']
         savefig = None# fig_path + f'pupil_FPM_IN-OUT_readout_mode-FULL_t{tstamp}.png'
 
-        util.nice_heatmap_subplots( im_list , xlabel_list, ylabel_list, title_list, cbar_label_list, fontsize=15, axis_off=True, cbar_orientation = 'bottom', savefig=savefig)
+        nice_heatmap_subplots( im_list , xlabel_list, ylabel_list, title_list, cbar_label_list, fontsize=15, axis_off=True, cbar_orientation = 'bottom', savefig=savefig)
 
         # check the active region 
         fig,ax = plt.subplots(1,1)
-        ax.imshow( util.get_DM_command_in_2D( dm_pupil_filt  ) )
+        ax.imshow( get_DM_command_in_2D( dm_pupil_filt  ) )
         ax.set_title('active DM region')
         ax.grid(True, which='minor',axis='both', linestyle='-', color='k' ,lw=3)
         ax.set_xticks( np.arange(12) - 0.5 , minor=True)
@@ -858,7 +859,7 @@ def PROCESS_BDR_RECON_DATA_INTERNAL(data, active_dm_actuator_filter=None, debug=
         #plt.savefig( fig_path + f'active_DM_region_{tstamp}.png' , bbox_inches='tight', dpi=300) 
         # check the well registered DM region : 
         fig,ax = plt.subplots(1,1)
-        ax.imshow( util.get_DM_command_in_2D( np.sum( P2C_1x1, axis=1 )))
+        ax.imshow( get_DM_command_in_2D( np.sum( P2C_1x1, axis=1 )))
         ax.set_title('well registered actuators')
         ax.grid(True, which='minor',axis='both', linestyle='-', color='k',lw=2 )
         ax.set_xticks( np.arange(12) - 0.5 , minor=True)
@@ -868,7 +869,7 @@ def PROCESS_BDR_RECON_DATA_INTERNAL(data, active_dm_actuator_filter=None, debug=
 
         # check poorly registered actuators: 
         fig,ax = plt.subplots(1,1)
-        ax.imshow( util.get_DM_command_in_2D(poor_registration_list) )
+        ax.imshow( get_DM_command_in_2D(poor_registration_list) )
         ax.set_title('poorly registered actuators')
         ax.grid(True, which='minor',axis='both', linestyle='-', color='k', lw=2 )
         ax.set_xticks( np.arange(12) - 0.5 , minor=True)
@@ -1052,7 +1053,7 @@ def twoD_Gaussian(xy, amplitude, xo, yo, sigma_x, sigma_y, theta, offset):
     return g.ravel()
 
 
-def fit_b(I0, N0, theta, image_filter ): 
+def fit_b_pixel_space(I0, N0, theta, image_filter , debug=True): 
     # fit b parameter from the reference fields I0 (FPM IN), N0 (FPM OUT) which should be 2D arrays, theta is scalar estimate of the FPM phase shift 
     # we can use N0 to remove bias/bkg by subtraction 
 
@@ -1060,43 +1061,66 @@ def fit_b(I0, N0, theta, image_filter ):
     X, Y = np.meshgrid( x, x)
     X_f=X.reshape(-1)[image_filter]
     Y_f=Y.reshape(-1)[image_filter]
-    data = I0.reshape(-1)[image_filter] #this is M^2
- 
 
+    # Ic = A^2 + M^2 + 2*M*A cos(phi+mu) .. we sample where A = 0=> Ic = M^2 = |A|^2 * f(b)
+    N0_med = np.median( N0.reshape(-1)[~image_filter] ) # we take the median FPM OUT signal inside the pupil (appart from center pixels) 
+    data = (I0.reshape(-1)[image_filter]/N0_med).reshape(-1) #((I0-N0)/N0).reshape(-1)[image_filter] #this is M^2/|A|^2
     initial_guess = (np.nanmax(data),np.mean(x),np.mean(x),np.std(x),np.std(x), 0, 0) 
 
     # fit it 
-    popt, pcov = scipy.optimize.curve_fit(twoD_Gaussian, (X_f, Y_f), data, p0=initial_guess)
+    popt, pcov = curve_fit(twoD_Gaussian, (X_f, Y_f), data, p0=initial_guess)
 
-    data_fitted = twoD_Gaussian((X, Y), *popt) / np.mean(I0.reshape(-1)[image_filter])
+    data_fitted = twoD_Gaussian((X, Y), *popt)  #/ np.mean(I0.reshape(-1)[image_filter])
 
     # fitted b in pixel space
     bfit = data_fitted.reshape(X.shape)**0.5 / (2*(1-np.cos(theta)))**0.5
 
-    im_list = [I0 * image_filter.reshape(I0.shape), bfit]
-    xlabel_list = ['','']
-    ylabel_list = ['','']
-    title_list = ['','']
-    cbar_label_list = ['[adu]', 'b'] 
-    savefig = fig_path + 'b_fit_internal_cal.png'
+    if debug:
+        im_list = [I0 * image_filter.reshape(I0.shape), bfit]
+        xlabel_list = ['','']
+        ylabel_list = ['','']
+        title_list = ['','']
+        cbar_label_list = ['filtered I0 [adu]', 'fitted b'] 
+        savefig = None #fig_path + 'b_fit_internal_cal.png'
 
-    util.nice_heatmap_subplots( im_list , xlabel_list, ylabel_list, title_list,cbar_label_list, fontsize=15, cbar_orientation = 'bottom', axis_off=True, savefig=savefig)
+        nice_heatmap_subplots( im_list , xlabel_list, ylabel_list, title_list,cbar_label_list, fontsize=15, cbar_orientation = 'bottom', axis_off=True, savefig=savefig)
 
-    # fitted b in DM space - how to best put this on DM 
-    bfit_dm = P2C_1x1 @ bfit.reshape(-1) 
-    #issue of not full P2C across DM range
-    plt.imshow( util.get_DM_command_in_2D( bfit_dm ) );plt.colorbar();plt.show()
+        plt.show()
 
-    return(bfit_pixels, bfit_dm) 
-
-image_filter = pupil_report['reference_field_peak_filter'] | pupil_report['outside_pupil_pixel_filter']
+    return(bfit) 
 
 
+def put_b_in_cmd_space( b, zwfs , debug = True):
+    # b is usually fitted in WFS pixel space - we need to map this back to the DM command space. 
+
+    # create interpolation function zwfs.row_coords ,  zwfs.col_coords 
+    b_interpolator = RegularGridInterpolator((zwfs.row_coords, zwfs.col_coords ), b)
+    # interpolate onto zwfs.dm_row_coordinates_in_pixels, zwfs.dm_col_coordinates_in_pixels (this is 12x12 DM grid in pixel space). 
+    X, Y = np.meshgrid(zwfs.dm_col_coordinates_in_pixels, zwfs.dm_row_coordinates_in_pixels ) 
+    pts = np.vstack([X.ravel(), Y.ravel()]).T 
+    b_on_dm_in_pixel_space = b_interpolator( pts ) 
+
+    #plt.figure(); plt.imshow( b_on_dm_in_pixel_space.reshape(12,12) );plt.colorbar(); plt.show()
+    
+    # drop the corners and flatten - this is our b in command space 
+    Nx_act_DM = 12 
+    corner_indices = [0, Nx_act_DM-1, Nx_act_DM * (Nx_act_DM-1), -1]
+    # put corners to nan on flattened array 
+    b_on_dm_in_pixel_space.reshape(-1)[corner_indices] = np.nan
+    #drop nan values so we go frp, 144 - 140 length array - OUR b in DM CMD SPACE :) 
+    b_in_dm_cmd_space = b_on_dm_in_pixel_space[ np.isfinite(b_on_dm_in_pixel_space) ] 
+
+    if debug:
+        plt.figure(); 
+        plt.title('fitted b in DM cmd space')
+        plt.imshow( get_DM_command_in_2D( b_in_dm_cmd_space ));plt.colorbar(); 
+        plt.show()
+   
+    return( b_in_dm_cmd_space ) 
 
 
 
-
-    """
+"""
     # get an estimate for things that should not ideally have spatial variability
     _, _, F_est, mu_est = np.median( list( param_dict.values() ) ,axis = 0)
 
@@ -1126,9 +1150,9 @@ image_filter = pupil_report['reference_field_peak_filter'] | pupil_report['outsi
     bsamples[dm_pupil_filt] = b_est
 
     plt.figure()
-    plt.imshow( util.get_DM_command_in_2D( bsamples )); plt.colorbar()
+    plt.imshow( get_DM_command_in_2D( bsamples )); plt.colorbar()
     plt.show()
-    """
+"""
 
 
 
