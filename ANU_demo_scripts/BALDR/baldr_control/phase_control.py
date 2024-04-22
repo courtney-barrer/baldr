@@ -149,10 +149,11 @@ class phase_controller_1():
         # remember that ZWFS.get_image automatically crops at corners ZWFS.pupil_crop_region
         ZWFS.states['busy'] = 1
         update_references = int( input('get new reference intensities (1/0)') )
-       
-        if update_references | ( (self.I0==None) | (self.N0==None) ):
 
-            imgs_to_median = 10 # how many images do we take the median of to build signal the reference signals 
+        imgs_to_median = 10 # how many images do we take the median of to build signal the reference signals        
+        if update_references : #| ( (self.I0==None) | (self.N0==None) ):
+
+
             # check other states match such as source etc
         
             # =========== PHASE MASK OUT 
@@ -214,7 +215,7 @@ class phase_controller_1():
                 errsig =  self.get_img_err( I ) #np.array( ( (I - self.I0) / np.median( self.N0 ) ) )
             else: 
                 raise TypeError(" reference intensity shapes do not match shape of current measured intensity. Check phase_controller.I0 and/or phase_controller.N0 attributes. Workaround would be to retake these. ")
-            IM.append( list(errsig.reshape(-1)) )
+            IM.append( list( errsig.reshape(-1) ) )
 
         # FLAT DM WHEN DONE
         ZWFS.dm.send_data( list( ZWFS.dm_shapes['flat_dm'] ) )
@@ -245,7 +246,7 @@ class phase_controller_1():
             plt.show()
             """
         # control matrix
-        CM = 1/abs(poke_amp) * np.linalg.pinv( U @ Sigma @ Vt ) # C = A @ M
+        CM =  np.linalg.pinv( U @ Sigma @ Vt ) # C = A @ M #1/abs(poke_amp)
        
         # class specific controller parameters
         ctrl_parameters = {}
@@ -283,7 +284,7 @@ class phase_controller_1():
         # full fit over ZWFS image 
         self.b_2D =  b_pixel_space
         #flattened and filtered in pupil space 
-        self.b = b_pixel_space.reshape(-1)[np.array( ZWFS.pupil_pixels )] 
+        self.b = b_pixel_space.reshape(-1)[ZWFS.pupil_pixel_filter] 
 
 
 

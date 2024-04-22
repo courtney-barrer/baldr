@@ -37,6 +37,8 @@ zwfs.set_camera_dit(DIT) # set the DIT
 ##    START CAMERA 
 zwfs.start_camera()
 # ----------------------
+# look at the image for a second
+util.watch_camera(zwfs)
 
 #init our phase controller (object that processes ZWFS images and outputs DM commands)
 phase_ctrl = phase_control.phase_controller_1(config_file = None) 
@@ -93,8 +95,8 @@ if debug:
 
 # 1.22) fit data internally (influence functions, b etc) 
 # use baldr.
-#recon_data = util.GET_BDR_RECON_DATA_INTERNAL(zwfs, number_amp_samples = 18, amp_max = 0.2, number_images_recorded_per_cmd = 2, save_fits = data_path+f'recon_data_LARGE_SECONDARY_{tstamp}.fits') 
-recon_data = fits.open( data_path+'recon_data_LARGE_SECONDARY_19-04-2024T12.19.22.fits' )
+recon_data = util.GET_BDR_RECON_DATA_INTERNAL(zwfs, number_amp_samples = 18, amp_max = 0.2, number_images_recorded_per_cmd = 2, save_fits = data_path+f'recon_data_UT_SECONDARY_{tstamp}.fits') 
+#recon_data = fits.open( data_path+'recon_data_LARGE_SECONDARY_19-04-2024T12.19.22.fits' )
 
 # process recon data to get a bunch of fits, DM actuator to pupil registration etc
 internal_cal_fits =  util.PROCESS_BDR_RECON_DATA_INTERNAL(recon_data ,active_dm_actuator_filter=phase_ctrl.config['active_actuator_filter'], debug=True, savefits=data_path + f'processed_recon_data_{tstamp}.fits'  )
@@ -134,6 +136,13 @@ phase_ctrl.build_control_model( zwfs , poke_amp = -0.15, label='ctrl_2', debug =
 plt.figure()
 plt.imshow( util.get_DM_command_in_2D( phase_ctrl.config['M2C'].T[2] ) );plt.show()
 
+
+
+
+
+
+
+
 if debug: 
     # check b 
     #plt.imshow( phase_ctrl.b_2D);plt.colorbar();plt.show()
@@ -154,7 +163,7 @@ if debug:
 
     #NEED TO IMPLEMENT THIS TO STANDARDIZE phase_ctrl.get_error_intensity( raw_img.reshape(-1)[zwfs.pupil_pixels] ) 
     # amplitudes of modes sensed
-    reco_modal_basis = phase_ctrl.control_phase( err_img  , controller_name = ctrl_method_label)
+    #reco_modal_basis = phase_ctrl.control_phase( err_img  , controller_name = ctrl_method_label)
 
     M2C = phase_ctrl.config['M2C'] # readability 
     CM = phase_ctrl.ctrl_parameters[ctrl_method_label]['CM'] # readability 

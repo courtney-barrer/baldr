@@ -86,8 +86,9 @@ x= np.array( [-1,1] )
 y = np.array( [-1,1] )
 ex_list = []
 ey_list = [] 
-
-plt.figure() 
+delta_list = []
+quad_list = [] 
+#plt.figure() 
 for i in range(10):
 
     delta_im_list = []
@@ -95,23 +96,25 @@ for i in range(10):
         delta_im_list.append( abs(zwfs.get_image() - zwfs.N0) )
         time.sleep(0.005)
 
-    delta_im = np.median( delta_im_list ,axis=0 ) 
+    delta_im = np.median( delta_im_list ,axis=0 )  
 
-    plt.plot( delta_im[len(delta_im)//2, : ] , label=f'{i}')
-    plt.plot( delta_im[:,len(delta_im)//2] )
+    #plt.plot( delta_im[len(delta_im)//2, : ] , label=f'{i}')
+    #plt.plot( delta_im[:,len(delta_im)//2] )
 
     # get 4 pixels around classified reference field peak 
     quad = delta_im.reshape(-1)[zwfs.refpeak_pixel_filter].reshape(2,2)
+
 
     ex = np.diff(np.sum(  quad, axis=0) )[0] #np.sum( x * quad, axis=0)/np.sum( quad ,axis=0) 
     ey = np.diff(np.sum(  quad, axis=1) )[0]#np.sum( y * quad, axis=1)/np.sum( quad ,axis=1)
 
     ex_list.append( ex - ex_ref )
     ey_list.append( ey - ey_ref)
-
+    delta_list.append( delta_im )
+    quad_list.append( quad )
 
     _ = input('move pupil 1 tick, press enter when ready ')
-plt.show() 
+#plt.show() 
 
 #want to save images to! keep I, N0, filter to create movie?
 
@@ -119,23 +122,57 @@ plt.show()
 offsets = np.linspace(0, 1/4, len(ex_list) )
 
 plt.figure()
-plt.plot( offsets , ex_list ,label='x error') 
-plt.plot(offsets,  ey_list ,label='y error') 
+plt.plot( offsets[:-3] , ex_list[:-3] ,label='x error') 
+plt.plot(offsets[:-3],  ey_list[:-3] ,label='y error') 
 plt.legend()
 plt.xlabel('pupil offset [%]')
 plt.ylabel('error cmd')
 
-plt.savefig(fig_path + f'first_pupil_ctrl_on_secondary_f{tstamp}.png', bbox_inches='tight', dpi=300) 
+plt.savefig(fig_path + f'pupil_ctrl_on_secondary_linear_ramp_f{tstamp}.png', bbox_inches='tight', dpi=300) 
 plt.show()
 
-df = pd.DataFrame( np.array([offsets, ex_list, ey_list]).T, columns = ['offset[pc]', 'err_x', 'err_y'] )
-df.to_csv(data_path + f'first_pupil_ctrl_on_secondary_f{tstamp}.csv')
+#df = pd.DataFrame( np.array([offsets, ex_list, ey_list]).T, columns = ['offset[pc]', 'err_x', 'err_y'] )
+#df.to_csv(data_path + f'first_pupil_ctrl_on_secondary_f{tstamp}.csv')
+
+
+data = fits.HDUList([]) #init main fits file to append things to
+        
+# Camera data
+
+ref_fits = fits.PrimaryHDU( np.array([zwfs.N0, zwfs.I0]) )
+ref_fits.header.set('EXTNAME', 'ref_intensities' )
+ref_fits.header.set('info', 'N0-I0' )
+
+off_fits = fits.PrimaryHDU( np.array([offsets, ex_list, ey_list]).T )
+off_fits.header.set('EXTNAME', 'offsets_with_errors' )
+off_fits.header.set('info', 'offset-ex-ey' )
+
+delta_fits = fits.PrimaryHDU( delta_list )
+delta_fits.header.set('EXTNAME', 'images' )
+delta_fits.header.set('info', 'I-N0' )
+
+diode_fits = fits.PrimaryHDU( quad_list )
+diode_fits.header.set('EXTNAME', 'quad_diode' )
+
+data.append( ref_fits )
+data.append( off_fits ) 
+data.append( delta_fits ) 
+data.append( diode_fits ) 
+
+data.writeto(data_path  + f'pupil_ctrl_on_secondary_liner_ramp_f{tstamp}.fits')
 
 
 
+if 1: 
+    norm = np.max(zwfs.N0.reshape(-1)[zwfs.pupil_pixel_filter] )
+    im_list = [zwfs.N0/norm, zwfs.I0/norm, (zwfs.I0-zwfs.N0)/zwfs.N0]
+    xlabel_list = ['x [pixels]','x [pixels]','x [pixels]']
+    ylabel_list = ['y [pixels]','y [pixels]','y [pixels]']
+    title_list = ['FPM OUT', 'FPM IN',r'$\Delta$']
+    cbar_label_list = ['Normalized pupil intensity','Normalized pupil intensity','Normalized pupil intensity']
+    savefig =  fig_path + f'pupil_FPM_IN-OUT_readout_mode-12x12_pupil_ctrl_secondary_{tstamp}.png'
 
-
-
+    util.nice_heatmap_subplots( im_list , xlabel_list, ylabel_list, title_list, cbar_label_list, fontsize=15, axis_off=True, cbar_orientation = 'bottom', savefig=savefig)
 
 
 
