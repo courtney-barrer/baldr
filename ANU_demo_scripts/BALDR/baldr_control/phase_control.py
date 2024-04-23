@@ -35,6 +35,7 @@ class phase_controller_1():
 
             self.config['dm_control_diameter'] = 12 # diameter (actuators) of active actuators
             self.config['dm_control_center'] = [0,0] # in-case of mis-alignments we can offset control basis on DM
+            # all reference intensities normalized by sum of pixels in cropping region. 
             self.I0 = None #reference intensity filtered over defined pupil with FPM IN (1D array)
             self.N0 = None #reference intensity filtered over defined pupil with FPM OUT (1D array)
             self.I0_2D = None # reference intensity with FPM IN without filtering (2D array)
@@ -93,6 +94,9 @@ class phase_controller_1():
 
             self.config['Kp'] = [0 for _ in range( self.config['number_of_controlled_modes'] )] # proportional gains
             self.config['Ki'] = [0 for _ in range( self.config['number_of_controlled_modes'] )] # integral gains
+            self.config['active_actuator_filter'] = (abs(np.sum( self.config['M2C'], axis=1 )) > 0 ).astype(bool)
+ 
+            self.config['active_actuator_indicies'] = np.where( abs(np.sum( self.config['M2C'], axis=1 )) > 0 )[0]
 
         elif  basis_name == 'WFS_Eigenmodes':  
             self.config['basis'] = basis_name
@@ -138,7 +142,9 @@ class phase_controller_1():
 
             self.config['Kp'] = [0 for _ in range( self.config['number_of_controlled_modes'] )] # proportional gains
             self.config['Ki'] = [0 for _ in range( self.config['number_of_controlled_modes'] )] # integral gains
-
+            self.config['active_actuator_filter'] = (abs(np.sum( self.config['M2C'], axis=1 )) > 0 ).astype(bool)
+ 
+            self.config['active_actuator_indicies'] = np.where( abs(np.sum( self.config['M2C'], axis=1 )) > 0 )[0]
 
 
 
@@ -148,10 +154,10 @@ class phase_controller_1():
         
         # remember that ZWFS.get_image automatically crops at corners ZWFS.pupil_crop_region
         ZWFS.states['busy'] = 1
-        update_references = int( input('get new reference intensities (1/0)') )
+        #update_references = int( input('get new reference intensities (1/0)') )
 
         imgs_to_median = 10 # how many images do we take the median of to build signal the reference signals        
-        if update_references : #| ( (self.I0==None) | (self.N0==None) ):
+        if 1 : #update_references : #| ( (self.I0==None) | (self.N0==None) ):
 
 
             # check other states match such as source etc
@@ -182,12 +188,12 @@ class phase_controller_1():
             I0 = np.median( I0_list, axis = 0 ) 
         
             # === ADD ATTRIBUTES 
-            self.I0 = I0.reshape(-1)[np.array( ZWFS.pupil_pixels )] # append reference intensity over defined     pupil with FPM IN 
-            self.N0 = N0.reshape(-1)[np.array( ZWFS.pupil_pixels )] # append reference intensity over defined pupil with FPM OUT 
+            self.I0 = I0.reshape(-1)[np.array( ZWFS.pupil_pixels )] / np.mean( I0 ) # append reference intensity over defined     pupil with FPM IN 
+            self.N0 = N0.reshape(-1)[np.array( ZWFS.pupil_pixels )] / np.mean( N0 ) # append reference intensity over defined pupil with FPM OUT 
 
             # === also add the unfiltered so we can plot and see them easily on square grid after 
-            self.I0_2D = I0 # 2D array (not filtered by pupil pixel filter)  
-            self.N0_2D = N0 # 2D array (not filtered by pupil pixel filter)
+            self.I0_2D = I0 / np.mean( I0 ) # 2D array (not filtered by pupil pixel filter)  
+            self.N0_2D = N0 / np.mean( N0 ) # 2D array (not filtered by pupil pixel filter)
 
         #  also update b attribute in phase controller
         self.update_b( ZWFS, self.I0_2D, self.N0_2D )
@@ -212,6 +218,9 @@ class phase_controller_1():
                 # !NOTE! we take median of pupil reference intensity with FPM out (self.N0)
                 # we do this cause we're lazy and do not want to manually adjust FPM every iteration (we dont have motors here) 
                 # real system prob does not want to do this and normalize pixel wise. 
+ 
+                # HAVE TO NORMALIZE BEFORE SENDING TO get_img_err
+                I *= 1/np.mean( I ) 
                 errsig =  self.get_img_err( I ) #np.array( ( (I - self.I0) / np.median( self.N0 ) ) )
             else: 
                 raise TypeError(" reference intensity shapes do not match shape of current measured intensity. Check phase_controller.I0 and/or phase_controller.N0 attributes. Workaround would be to retake these. ")
@@ -280,7 +289,7 @@ class phase_controller_1():
         # even though I0_2D, N0_2D is attribute in self we allow user to specify new ones to update b
         image_filter = ZWFS.refpeak_pixel_filter | ZWFS.outside_pixel_filter
 
-        b_pixel_space = util.fit_b_pixel_space(I0_2D, N0_2D, self.theta, image_filter , debug=False)
+        b_pixel_space = util.fit_b_pixel_space(I0_2D, self.theta, image_filter , debug=False)
         # full fit over ZWFS image 
         self.b_2D =  b_pixel_space
         #flattened and filtered in pupil space 
@@ -289,20 +298,26 @@ class phase_controller_1():
 
 
 
-    def get_img_err( self , img ):
-        # input img has to be flattened and filtered in pupil region 
+    def get_img_err( self , img_normalized ):
+        # input img has to be normalized by sum of entire raw image in cropped region 
+        # flattened and filtered in pupil region 
         #(i.e. get raw img then apply img.reshape(-1)[ ZWFS.pupil_pixels])
 
         # !NOTE! we take median of pupil reference intensity with FPM out (self.N0)
         # we do this cause we're lazy and do not want to manually adjust FPM every iteration (we dont have motors here) 
         # real system prob does not want to do this and normalize pixel wise. 
         #errsig =  np.array( ( (img - self.I0) / np.median( self.N0 ) ) )
-        errsig =  np.array( ( (img - self.I0) / (2 * self.b * np.sin( self.theta ) ) ) )
+        
+        # normalize image 
+
+        errsig =  np.array( ( (img_normalized - self.I0) / (2 * self.b * np.sin( self.theta ) ) ) )
+
         return(  errsig )
 
 
     def update_FPM_OUT_reference(self, ZWFS, N0_2D):
         #N0_2D must be a 2D array of the estimate of the pupil intensity with the FPM mask out.
+        #!!!! IMPORTANT !!! WE DO NOT NORMALIZE HERE - SO I0_2D SHOULD BE NORMALIZED BY MEAN OVER FULL PUPIL IMAGE REGION ON INPUT!
         #ZWFS must be provided since this holds the pixel filter for the wavefront sensing 
 
         # we should do some checking here that the input N0_2D matches number of pixels from ZWFS.get_image() 
@@ -310,12 +325,13 @@ class phase_controller_1():
         if N0_2D.shape != [r2-r1, c2-c1]:
             raise TypeError(f'N0_2D needs to have shape {[r2-r1,c2-c1]} to match image size produced from the input ZWFS object.')  
 
-        self.N0 = N0_2D.reshape(-1)[np.array( ZWFS.pupil_pixels )]
-        self.N0_2D = N0_2D   
+        self.N0 =  N0_2D.reshape(-1)[np.array( ZWFS.pupil_pixels )]
+        self.N0_2D =  N0_2D   
         
 
     def update_FPM_IN_reference(self, ZWFS, I0_2D):
-        #N0_2D must be a 2D array of the estimate of the pupil intensity with the FPM mask out.
+        #i0_2D must be a 2D array of the estimate of the pupil intensity with the FPM mask out.
+        #!!!! IMPORTANT !!! WE DO NOT NORMALIZE HERE - SO I0_2D SHOULD BE NORMALIZED BY MEAN OVER FULL PUPIL IMAGE REGION ON INPUT!
         #ZWFS must be provided since this holds the pixel filter for the wavefront sensing 
 
         # we should do some checking here that the input N0_2D matches number of pixels from ZWFS.get_image() 
@@ -324,7 +340,7 @@ class phase_controller_1():
             raise TypeError(f'N0_2D needs to have shape {[r2-r1,c2-c1]} to match image size produced from the input ZWFS object.')  
 
         self.I0 = I0_2D.reshape(-1)[np.array( ZWFS.pupil_pixels )]
-        self.I0_2D = I0_2D   
+        self.I0_2D =  I0_2D   
 
 
     def measure_FPM_OUT_reference(self, ZWFS) : 
@@ -346,10 +362,10 @@ class phase_controller_1():
         #put self.config['fpm'] phasemask on-axis (for now I only have manual adjustment)
 
         # === ADD ATTRIBUTES 
-        self.N0 = N0.reshape(-1)[np.array( ZWFS.pupil_pixels )] # append reference intensity over defined pupil with FPM OUT 
+        self.N0 =  1/np.mean( N0 ) * N0.reshape(-1)[np.array( ZWFS.pupil_pixels )] # append reference intensity over defined pupil with FPM OUT 
 
         # === also add the unfiltered so we can plot and see them easily on square grid after 
-        self.N0_2D = N0 # 2D array (not filtered by pupil pixel filter) 
+        self.N0_2D = 1/np.mean( N0 ) * N0 # 2D array (not filtered by pupil pixel filter) 
 
     def measure_FPM_IN_reference(self, ZWFS):
 
@@ -367,10 +383,10 @@ class phase_controller_1():
         I0 = np.median( I0_list, axis = 0 ) 
         
         # === ADD ATTRIBUTES 
-        self.I0 = I0.reshape(-1)[np.array( ZWFS.pupil_pixels )] # append reference intensity over defined pupil with FPM IN 
+        self.I0 = 1/np.mean( I0 ) * I0.reshape(-1)[np.array( ZWFS.pupil_pixels )] # append reference intensity over defined pupil with FPM IN 
 
         # === also add the unfiltered so we can plot and see them easily on square grid after 
-        self.I0_2D = I0 # 2D array (not filtered by pupil pixel filter)  
+        self.I0_2D = 1/np.mean( I0 ) * I0 # 2D array (not filtered by pupil pixel filter)  
   
 
     def control_phase(self, img, controller_name ):

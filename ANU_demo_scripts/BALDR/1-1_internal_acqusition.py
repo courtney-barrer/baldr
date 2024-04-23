@@ -103,13 +103,69 @@ internal_cal_fits =  util.PROCESS_BDR_RECON_DATA_INTERNAL(recon_data ,active_dm_
 
 # from internal_cal_fits we can calculate and update phase_ctrl.theta 
 #I0 = recon_data['FPM_IN'].data
-#N0 = recon_data['FPM_OUT'].data
-#theta = 2.1
-#image_filter = zwfs.refpeak_pixel_filter | zwfs.outside_pixel_filter
+""" ## Measuring & Plotting b vs Strehl ratio 
+theta = 2.1
+image_filter = zwfs.refpeak_pixel_filter | zwfs.outside_pixel_filter
+rms_ab_grid = np.linspace( 0 , 0.1, 20 )
+ab =  np.random.randn(140) * phase_ctrl.config['active_actuator_filter'].astype(float) # aberration
+b_list = [] # to hold b peak of fits
+strehl = [] 
+ref_field_int = [] # reference field intensity at secondary pixels 
+zwfs.dm.send_data( zwfs.dm_shapes['flat_dm'] ) #flat dM
+for rms in rms_ab_grid : 
+    zwfs.dm.send_data( zwfs.dm_shapes['flat_dm'] + rms * ab) 
+
+    img_list = []
+    for _ in range(10):
+        img_list.append( zwfs.get_image() )
+        time.sleep(0.01)
+    img = np.median( img_list, axis=0 ) 
+    ref_field_int.append( np.mean( img.reshape(-1)[ zwfs.refpeak_pixel_filter ] ) / np.mean( img ) ) 
+    b_pixel_space = util.fit_b_pixel_space(img , theta, image_filter , debug=False)
+    b_list.append( b_pixel_space )
+    strehl.append( np.exp(- np.var( 12.5* rms * ab) ) ) # 12.5 rad on wavefront per DM cmd 
+
+plt.figure()
+plt.plot( 12.5 * rms_ab_grid * np.std( ab ), np.array( [np.max(b) for b in b_list] ) / np.max( b_list[0] ) , label=r'$\frac{b_{max}}{b_{0,max}}$')
+plt.plot( 12.5 * rms_ab_grid * np.std( ab ), np.array(strehl)**0.5 ,label = r'$\sqrt{Strehl}$' )
+plt.xlabel('aberration [rad RMS]',fontsize=15) 
+plt.ylabel(r'normalized units',fontsize=15)
+plt.gca().tick_params(labelsize=15)  
+plt.legend(fontsize=15)
+#plt.savefig(fig_path + 'fitting_b_vs_aberration.png',bbox_inches='tight', dpi=300) 
+plt.show() 
+
+plt.figure()
+plt.plot( 12.5 * rms_ab_grid * np.std( ab ), np.array( ref_field_int ) /ref_field_int[0], label=r'$I_{secondary}$')
+plt.plot( 12.5 * rms_ab_grid * np.std( ab ), np.array(strehl) ,label = r'$Strehl$' )
+plt.xlabel('aberration [rad RMS]',fontsize=15) 
+plt.ylabel(r'normalized units',fontsize=15)
+plt.gca().tick_params(labelsize=15)  
+plt.legend(fontsize=15)
+plt.savefig(fig_path + 'peak_reference_field_vs_aberration.png',bbox_inches='tight', dpi=300) 
+plt.show() 
+
+plt.figure()
+pup_filt_tmp = np.sum(  zwfs.pupil_pixel_filter.reshape( zwfs.I0.shape), axis=0) > 0
+for r,b in zip(rms_ab_grid[::5], b_list[::5]):
+    rms = 12.5 * r * np.std( ab )
+    plt.plot( np.linspace(-0.5,0.5,sum(pup_filt_tmp)),   b[len(b)//2,:][pup_filt_tmp]/np.max(b_list[0]), label=f'Strehl={np.round(np.exp(-rms**2),2)}')
+    #plt.plot( np.sum(  zwfs.pupil_pixel_filter.reshape( zwfs.I0.shape), axis=0) > 0, linestyle=':',label='pupil')
+plt.xlabel('normalized pupil diameter',fontsize=15) 
+plt.ylabel('Normalized b fit\ncross section',fontsize=15) 
+plt.legend()
+#plt.savefig(fig_path + 'fitting_b_cross_sections.png', bbox_inches='tight', dpi=300) 
+plt.show() 
+"""
+
+
+
+
+
 
 # plt.figure(); plt.imshow( image_filter.reshape(I0.shape) );plt.show()
 
-#b_pixel_space = util.fit_b_pixel_space(I0, N0, theta, image_filter , debug=True)
+#b_pixel_space = util.fit_b_pixel_space(zwfs.I0, theta, image_filter , debug=True)
 
 #b_cmd_space = util.put_b_in_cmd_space( b_pixel_space, zwfs )
 

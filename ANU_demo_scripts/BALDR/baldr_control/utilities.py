@@ -234,11 +234,11 @@ def watch_camera(zwfs, frames_to_watch = 10, time_between_frames=0.01,cropping_c
 
 
 
-def create_phase_screen_cmd_for_DM(scrn, flat_reference, scaling_factor=0.1, drop_indicies = None, plot_cmd=False):
+def create_phase_screen_cmd_for_DM(scrn,  scaling_factor=0.1, drop_indicies = None, plot_cmd=False):
     """
     aggregate a scrn (aotools.infinitephasescreen object) onto a DM command space. phase screen is normalized by
-    between +-0.5 and then scaled by scaling_factor and offset by flat_reference command. Final DM command values should
-    always be between 0-1. phase screens are usually a NxN matrix, while DM is MxM with some missing pixels (e.g. 
+    between +-0.5 and then scaled by scaling_factor. Final DM command values should
+    always be between -0.5,0.5 (this should be added to a flat reference so flat reference + phase screen should always be bounded between 0-1). phase screens are usually a NxN matrix, while DM is MxM with some missing pixels (e.g. 
     corners). drop_indicies is a list of indicies in the flat MxM DM array that should not be included in the command space. 
     """
 
@@ -264,7 +264,7 @@ def create_phase_screen_cmd_for_DM(scrn, flat_reference, scaling_factor=0.1, dro
              
     if plot_cmd: #can be used as a check that the command looks right!
         fig,ax = plt.subplots(1,2,figsize=(12,6))
-        im0 = ax[0].imshow(np.mean(flat_reference) + scrn_on_DM.reshape([Nx_act,Nx_act]) )
+        im0 = ax[0].imshow(scrn_on_DM.reshape([Nx_act,Nx_act]) )
         ax[0].set_title('DM command (averaging offset)')
         im1 = ax[1].imshow(scrn.scrn)
         ax[1].set_title('original phase screen')
@@ -1053,7 +1053,7 @@ def twoD_Gaussian(xy, amplitude, xo, yo, sigma_x, sigma_y, theta, offset):
     return g.ravel()
 
 
-def fit_b_pixel_space(I0, N0, theta, image_filter , debug=True): 
+def fit_b_pixel_space(I0, theta, image_filter , debug=True): 
     # fit b parameter from the reference fields I0 (FPM IN), N0 (FPM OUT) which should be 2D arrays, theta is scalar estimate of the FPM phase shift 
     # we can use N0 to remove bias/bkg by subtraction 
 
@@ -1062,9 +1062,9 @@ def fit_b_pixel_space(I0, N0, theta, image_filter , debug=True):
     X_f=X.reshape(-1)[image_filter]
     Y_f=Y.reshape(-1)[image_filter]
 
-    # Ic = A^2 + M^2 + 2*M*A cos(phi+mu) .. we sample where A = 0=> Ic = M^2 = |A|^2 * f(b)
-    N0_med = np.median( N0.reshape(-1)[~image_filter] ) # we take the median FPM OUT signal inside the pupil (appart from center pixels) 
-    data = (I0.reshape(-1)[image_filter]/N0_med).reshape(-1) #((I0-N0)/N0).reshape(-1)[image_filter] #this is M^2/|A|^2
+    # we normalize by average of I0 over entire image 
+    I0_mean = np.mean( I0 ) # we take the median FPM OUT signal inside the pupil (appart from center pixels) 
+    data = (I0.reshape(-1)[image_filter]/I0_mean).reshape(-1) #((I0-N0)/N0).reshape(-1)[image_filter] #this is M^2/|A|^2
     initial_guess = (np.nanmax(data),np.mean(x),np.mean(x),np.std(x),np.std(x), 0, 0) 
 
     # fit it 
