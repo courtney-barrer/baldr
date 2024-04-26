@@ -15,7 +15,15 @@ fig_path = '/home/baldr/Documents/baldr/ANU_demo_scripts/BALDR/figures/'
 data_path = '/home/baldr/Documents/baldr/ANU_demo_scripts/BALDR/data/telemetry/'
 
 
-def close_loop(zwfs, phase_ctrl, disturbance_coes, Kp, Ki, iterations, closed_loop=False, close_after=np.inf, update_dist_every=2, telemetry=True, psf_crop_region=[10,20,10,20]):
+def close_loop(zwfs, phase_ctrl, disturbance_coes, modal_thresholds , Kp, Ki, iterations,  closed_loop=False, close_after=np.inf, update_dist_every=2, telemetry=True, psf_crop_region=[10,20,10,20],AR1_disturbance=True, AR1_noise_amp = 0.005):
+    """
+
+    disturbance_coes if AR1_disturbance=True these are the amplitude coefficients in the modal basis of our disturbance. If false these are the input phase screen (Kolmogorov turbulence) that we roll with aotools package.   
+
+    modal thresholds is list (length #modes) that sets modal amplitude to zero unles greater than threshold - used to combat noise in the system - a reasonable threshold can be found by measuring the std of modal amps reconstructed when zero aberrations are applied. 
+
+    AR1_noise_amp is the amplitude of random noise applied to modal coefficients of disturbance in its evolution. Default is 0.005 
+    """
 
     # ============ INITIALIZATION 
     #telemetry = True
@@ -32,7 +40,11 @@ def close_loop(zwfs, phase_ctrl, disturbance_coes, Kp, Ki, iterations, closed_lo
     cmd_region_filt = phase_ctrl.config['active_actuator_filter'] 
 
     #make our disturbance command from the coefcients 
-    disturbance_cmd = M2C @ disturbance_coes
+    if AR1_disturbance:
+        disturbance_cmd = M2C @ disturbance_coes
+
+    else: 
+        scrn = disturbance_coes # should be an aotools Kolmogorov phase screen 
 
 
     # gains 
@@ -113,7 +125,9 @@ def close_loop(zwfs, phase_ctrl, disturbance_coes, Kp, Ki, iterations, closed_lo
         img_err_buffer.insert( 0, phase_ctrl.get_img_err(img_filtered_buffer[0]) ) #pixel space
 
         # modal residuals coefficients from the ZWFS
-        modal_err_buffer.insert( 0, CM.T @ img_err_buffer[0] ) #DM modal space
+        modal_coes = CM.T @ img_err_buffer[0] 
+        modal_coes = [m if abs(m) > modal_thresholds[i] else 0 for i,m in enumerate(modal_coes) ]
+        modal_err_buffer.insert( 0,modal_coes ) #DM modal space
 
         # safety / anti windup
         # modes normalized <M|M>=1 in cmd basis (clamping anti windup https://www.youtube.com/watch?app=desktop&v=UMit8mVCJ_I)
@@ -140,18 +154,20 @@ def close_loop(zwfs, phase_ctrl, disturbance_coes, Kp, Ki, iterations, closed_lo
             dm_cmd_buffer.insert(0, flat_dm_cmd )
         closed_loop_state.append( int(closed_loop)  ) # keep track if we're opened or closed 
 
-        # function to update input phase 
-        if np.mod(update_dist_every, i+1):
-            disturbance_coes = update_disturbance_modal_coefficient(disturbance_coes) #applies AR(1) model to modal coefficients 
-            disturbance_cmd = M2C @ disturbance_coes # rebuild our disturbance command 
+        if AR1_disturbance: #if AR disturbance - we can make static by setting coeficients to zero
+            # function to update input phase 
+            if np.mod(update_dist_every, i+1):
+                disturbance_coes = update_disturbance_modal_coefficient(disturbance_coes, noise_amp = AR1_noise_amp) #applies AR(1) model to modal coefficients 
+                disturbance_cmd = M2C @ disturbance_coes # rebuild our disturbance command 
         
-        """
-        for skip in range(rows_to_jump):
-        scrn.add_row() 
+        else: # Kolmogorov screen object from aotools package
+            for skip in range(rows_to_jump):
+                scrn.add_row() 
         # get our new Kolmogorov disturbance command 
-        disturbance_cmd = cmd_region_filt * cmd_region_filt * util.create_phase_screen_cmd_for_DM(scrn=scrn, scaling_factor = scrn_scaling_factor, drop_indicies = corner_indicies, plot_cmd=False)
-        disturbance_cmd -= np.mean( disturbance_cmd )
-        """
+            disturbance_cmd = cmd_region_filt * util.create_phase_screen_cmd_for_DM(scrn=scrn, scaling_factor = scrn_scaling_factor, drop_indicies = corner_indicies, plot_cmd=False)
+
+            disturbance_cmd -= np.mean( disturbance_cmd )
+        
 
         # apply DM command if in closed loop
         if closed_loop:
@@ -213,13 +229,13 @@ def close_loop(zwfs, phase_ctrl, disturbance_coes, Kp, Ki, iterations, closed_lo
 
 
 
-def update_disturbance_modal_coefficient(coes):
+def update_disturbance_modal_coefficient(coes, noise_amp=0.005):
     #checking psf imaging and tip commands are seen - we get about 16 pixels per tip DM cmd, 0.1 amp -> 1.6 pixel shift in centroid (without pixelation)
     for i,c in enumerate(coes):
         if c!=0:
-            coes[i] = coes[i] + 0.005 * np.random.randn()
-            if coes[i] < 0.2:
-                coes[i] = coes[i] + 0.002
+            coes[i] = 1.0*coes[i] + noise_amp * np.random.randn()
+            #if coes[i] < 0.2:
+            #    coes[i] = coes[i] + 0.002
     return(coes) 
 
 
@@ -228,7 +244,7 @@ def update_disturbance_modal_coefficient(coes):
 tstamp = datetime.datetime.now().strftime("%d-%m-%YT%H.%M.%S")
 
 debug = True # plot some intermediate results 
-fps = 400 
+fps = 600 
 DIT = 2e-3 #s integration time 
 
 sw = 8 # 8 for 12x12, 16 for 6x6 
@@ -238,14 +254,15 @@ pupil_crop_region = [157-sw, 269+sw, 98-sw, 210+sw ] #[165-sw, 261+sw, 106-sw, 2
 zwfs = ZWFS.ZWFS(DM_serial_number='17DW019#053', cameraIndex=0, DMshapes_path = '/home/baldr/Documents/baldr/ANU_demo_scripts/BALDR/DMShapes/', pupil_crop_region=pupil_crop_region ) 
 
 # ,------------------ AVERAGE OVER 8X8 SUBWIDOWS SO 12X12 PIXELS IN PUPIL
-zwfs.pixelation_factor = sw #8 # sum over 8x8 pixel subwindows in image
+#zwfs.pixelation_factor = sw #8 # sum over 8x8 pixel subwindows in image
 # HAVE TO PROPAGATE THIS TO PUPIL COORDINATES 
-zwfs._update_image_coordinates( )
+#zwfs._update_image_coordinates( )
 
 zwfs.set_camera_fps(fps) # set the FPS 
-zwfs.set_camera_dit(DIT) # set the DIT 
+#zwfs.set_camera_dit(DIT) # set the DIT 
 
 psf_crop_region = [215,275,230,290]
+
 
 
 ##
@@ -268,7 +285,7 @@ else:
 
 # ============= BUILD CONTROL MODEL  
 ctrl_method_label = 'ctrl_1'
-phase_ctrl.build_control_model( zwfs , poke_amp = -0.1, label=ctrl_method_label, debug = True)  
+phase_ctrl.build_control_model( zwfs , poke_amp = -0.08, label=ctrl_method_label, debug = True)  
 
 
 # ========== NOISE ANALYSIS 
@@ -277,8 +294,8 @@ phase_ctrl.build_control_model( zwfs , poke_amp = -0.1, label=ctrl_method_label,
 zwfs.dm.send_data( flat_dm_cmd ) 
 
 # DISTURBANCE
-# disturbance_cmd = 0.3* phase_ctrl.config['M2C'].T[0]
-disturbance_coes = np.zeros( phase_ctrl.config['M2C'].shape[1]  ) 
+#disturbance_cmd = 0.3* phase_ctrl.config['M2C'].T[0]
+disturbance_coes = #np.zeros( phase_ctrl.config['M2C'].shape[1]  ) 
 
 cmd_region_filt = phase_ctrl.config['active_actuator_filter'] 
 
@@ -286,10 +303,14 @@ cmd_region_filt = phase_ctrl.config['active_actuator_filter']
 radpercmd = 12.5 # radians on wavefront per DM cmd 
 wvl0 = 1290 #nm 
 M2C = phase_ctrl.config['M2C'] 
+
 Ki = np.zeros( M2C.shape[1]  )
 Kp = np.zeros( M2C.shape[1]  )
 
-tele_fits = close_loop(zwfs, phase_ctrl,  disturbance_coes, Kp, Ki, iterations=500, closed_loop=False, close_after = 1e4, update_dist_every=5, telemetry=True, psf_crop_region = psf_crop_region)
+modal_thresholds = np.zeros(len(Kp))
+
+
+tele_fits = close_loop(zwfs, phase_ctrl,  disturbance_coes, modal_thresholds, Kp, Ki, iterations=500, closed_loop=False, close_after = 1e4, update_dist_every=5, telemetry=True, psf_crop_region = psf_crop_region)
 
 fig,ax = plt.subplots( 1, 1 )
 #plt.plot( np.mean( tele_fits['MODE_ERR'].data, axis=0) )
@@ -318,14 +339,72 @@ plt.show()
 
 
 # ============= INIT PHASE SCREEN  
+
+# measured modal thresholds (std of reconstructed amplitude when zero aberration is applied) 
+
+modal_thresholds = 1 * np.array( [ 0.39555616, 0.2501479 , 0.11545258, 0.13992717, 0.30506888,\
+       0.22338625, 0.19602951, 0.22969804, 0.2687614 , 0.08222432,\
+       0.3400629 , 0.13896875, 0.18916213, 0.31676141, 0.11147537,\
+       0.13763931, 0.18769674, 0.16252339, 0.2165885 , 0.29439105,\
+       0.07353465, 0.0726412 , 0.19220184, 0.2005946 , 0.2263115 ,\
+       0.11835411, 0.37590636, 0.0373991 , 0.09540536, 0.07899962,\
+       0.16531802, 0.14329735, 0.25502938, 0.18237862, 0.26852392,\
+       0.05632972, 0.10451127, 0.08489415, 0.14471358, 0.09316814,\
+       0.09999374, 0.08088831, 0.26268527, 0.21924331, 0.10987777,\
+       0.07998501, 0.0786443 , 0.08721646, 0.06250997, 0.03993415,\
+       0.0820969 , 0.06844364, 0.047909  , 0.04957697, 0.10597912,\
+       0.03107558, 0.08157544, 0.03217939, 0.03923213, 0.03644321,\
+       0.04854543, 0.11077345, 0.15763564, 0.09955516, 0.23126507,\
+       0.0218391 , 0.07404411, 0.05718924, 0.03131727, 0.04085174] )
+
+#modal_thresholds = np.zeros(len( Ki ) )
+
+
 flat_dm_cmd = zwfs.dm_shapes['flat_dm']
 
 zwfs.dm.send_data( flat_dm_cmd ) 
 
 #  DISTURBANCE
-#disturbance_cmd = 0.3* phase_ctrl.config['M2C'].T[0]
+
+
+""" 
+# KOLMOGOROV TURBULENCE 
+scrn_scaling_factor = 0.2
+# --- create infinite phasescreen from aotools module 
+Nx_act = 12
+screen_pixels = Nx_act*2**5 # some multiple of numer of actuators across DM 
+D = 1.8 #m effective diameter of the telescope
+scrn = aotools.infinitephasescreen.PhaseScreenVonKarman(nx_size=screen_pixels, pixel_scale=D/screen_pixels,r0=0.1,L0=12)
+
+corner_indicies = [0, Nx_act-1, Nx_act * (Nx_act-1), -1] # Beware -1 index doesn't work if inserting in list! This is  ok for for use with create_phase_screen_cmd_for_DM function.
+
+disturbance_cmd = cmd_region_filt * util.create_phase_screen_cmd_for_DM(scrn=scrn, scaling_factor = scrn_scaling_factor, drop_indicies = corner_indicies, plot_cmd=True)  # normalized flat_dm +- scaling_factor?
+
+disturbance_cmd -= np.mean( disturbance_cmd ) # no piston!! 
+
+rows_to_jump = 1 # how many rows to jump on initial phase screen for each Baldr loop
+
+distance_per_correction = rows_to_jump * D/screen_pixels # effective distance travelled by turbulence per AO iteration 
+print(f'{rows_to_jump} rows jumped per AO command in initial phase screen of {screen_pixels} pixels. for {D}m mirror this corresponds to a distance_per_correction = {distance_per_correction}m')
+
+disturbance_coes = scrn
+#plt.figure();plt.imshow( util.get_DM_command_in_2D(disturbance_cmd ));plt.show() #to check on filtered cmd space
+
+im_list = [util.get_DM_command_in_2D(disturbance_cmd ), scrn.scrn]
+xlabel_list = [None, None, None]
+ylabel_list = [None, None, None]
+title_list = ['phase screen DM', 'Kolmogorov phase screen']
+cbar_label_list = ['DM command', 'phase [rad]' ] 
+savefig = None #data_path + f'kolmogorov_screen_on_dm.png'
+
+util.nice_heatmap_subplots( im_list , xlabel_list, ylabel_list, title_list, cbar_label_list, fontsize=15, axis_off=True, cbar_orientation = 'bottom', savefig=savefig)
+"""
+
+# AR1 disturbance  
 disturbance_coes = np.zeros( phase_ctrl.config['M2C'].shape[1]  ) 
-disturbance_coes[0] = 0.3 # only put tip
+#disturbance_coes[0] = 0.3    # only put tip
+controlled_modes_indx = np.arange(0,5) 
+disturbance_coes[controlled_modes_indx] = 0.1 * np.ones( len(controlled_modes_indx) ) #[0.4,0.4,0.4]#np.logspace( -1, -3, phase_ctrl.config['M2C'].shape[1])
 
 cmd_region_filt = phase_ctrl.config['active_actuator_filter'] 
 
@@ -333,21 +412,28 @@ cmd_region_filt = phase_ctrl.config['active_actuator_filter']
 radpercmd = 12.5 # radians on wavefront per DM cmd 
 wvl0 = 1290 #nm 
 M2C = phase_ctrl.config['M2C'] 
-Ki = np.zeros( M2C.shape[1]  )
-Kp = np.zeros( M2C.shape[1]  )
+#Ki = np.zeros( M2C.shape[1]  )
+#Kp = np.zeros( M2C.shape[1]  )
 
+Ki = np.zeros(M2C.shape[1]) # 0. * np.array( [1/(n+1)**0.5 for n in range( M2C.shape[1] ) ]) #np.ones( M2C.shape[1]  ) #np.array( [1/n**0.5 for n in range( M2C.shape[1] ) ] ) #np.zeros( M2C.shape[1]  )
+Kp = np.zeros(M2C.shape[1]) #list( 1/5 * np.ones(5)) + list(np.zeros(50)) #np.array( [1/(n+1)**0.5 for n in range( M2C.shape[1] ) ] ) #np.ones( M2C.shape[1]  ) #np.zeros( M2C.shape[1]  )
 
 #checking psf imaging and tip commands are seen - we get about 16 pixels per tip DM cmd, 0.1 amp -> 1.6 pixel shift in centroid (without pixelation)
 
-#Kp[[0,1]] = 1/15, 0*1/10 #1/18, 1/18 # 1/12, 1/12 #pp_grid[iopt]
-#Ki[[0,1]] = 0.4, 0.   # ii_grid[jopt]
+# tip/tilt
+Kp[controlled_modes_indx ] = 1/20 * np.array([1/(n+1) for n in range( len(controlled_modes_indx) ) ])#1/15, 1/15, 1/20 #1/18, 1/18 # 1/12, 1/12 #pp_grid[iopt]
+Ki[controlled_modes_indx ] = 0.2 * np.ones( len(controlled_modes_indx) ) #0.4, 0.4, 0.2   # ii_grid[jopt]
 
-tele_fits = close_loop(zwfs, phase_ctrl,  disturbance_coes, Kp, Ki, iterations=500, closed_loop=False, close_after = 1e4, update_dist_every=5, telemetry=True, psf_crop_region=psf_crop_region)
+AR1_noise_amp = 0.005
 
-#fname =f'ZERO_DISTURB_NOISE_ANALYSIS_TELEMETRY_basis-{phase_ctrl.config["basis"]}_ctrl_modes-{phase_ctrl.config["number_of_controlled_modes"]}_ctrl_act_diam-{phase_ctrl.config["dm_control_diameter"]}readout_mode-12x12_{tstamp}.fits'
+tele_fits = close_loop(zwfs, phase_ctrl,  disturbance_coes, modal_thresholds, Kp, Ki, iterations=200, closed_loop=False, close_after = 50, update_dist_every=10, telemetry=True, psf_crop_region=psf_crop_region, AR1_disturbance=True, AR1_noise_amp = AR1_noise_amp)
+#AR1_disturbance = False for Kolmogorv phase screen 
+
+i=0
+
+fname =f'MODAL_CLOSED_DYNAMIC_TELEMETRY_{i}_basis-{phase_ctrl.config["basis"]}_ctrl_modes-{phase_ctrl.config["number_of_controlled_modes"]}_ctrl_act_diam-{phase_ctrl.config["dm_control_diameter"]}readout_mode-12x12_AR_noise_amp-{AR1_noise_amp}_{tstamp}.fits'
 
 #tele_fits.writeto( data_path + fname )
-
 
 
 #RMSE
@@ -356,10 +442,11 @@ plt.figure()
 #plt.plot( 2 * interp_deflection_4x4act( RMS_tele ),'.',label='residual' )
 plt.plot( wvl0/(2*np.pi)  * radpercmd * np.array( tele_fits['RMS'].data ) ,'-',label='residual' )
 plt.plot( wvl0/(2*np.pi)  * radpercmd * np.array([np.std(cmd_region_filt * d) for d in tele_fits['DISTURBANCE'].data]) ,'-',label='disturbance' )
-plt.ylabel('tip/tilt [nm RMS]')
+#plt.ylabel('tip/tilt [nm RMS]')
+plt.ylabel('OPD [nm RMS]')
 plt.xlabel('iteration')
 plt.legend()
-#plt.savefig(data_path + f'E2_TIP-TILT_CLOSED_DYNAMIC_TELEMETRY_basis-{phase_ctrl.config["basis"]}_ctrl_modes-{phase_ctrl.config["number_of_controlled_modes"]}_ctrl_act_diam-{phase_ctrl.config["dm_control_diameter"]}readout_mode-12x12_{tstamp}.png')
+#plt.savefig(data_path + f'MODAL_CLOSED_DYNAMIC_TELEMETRY_{i}_basis-{phase_ctrl.config["basis"]}_ctrl_modes-{phase_ctrl.config["number_of_controlled_modes"]}_ctrl_act_diam-{phase_ctrl.config["dm_control_diameter"]}readout_mode-12x12_AR_noise_amp-{AR1_noise_amp}_{tstamp}.png')
 #plt.xlim([0,50]);plt.ylim([24,26]);plt.show()
 #print( 'final RMSE =', interp_deflection_4x4act(RMS_tele[-1] ) )
 #print( 'RMSE after 100 iter. =',interp_deflection_4x4act( RMS_tele[100] ) );

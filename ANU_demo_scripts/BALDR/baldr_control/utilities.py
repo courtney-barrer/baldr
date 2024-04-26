@@ -550,14 +550,14 @@ def get_camera_info(camera):
     return(camera_info_dict)
 
     
-def scan_detector_framerates(camera, frame_rates, number_images_recorded_per_cmd = 50, cropping_corners=None, save_fits = None): 
+def scan_detector_framerates(zwfs, frame_rates, number_images_recorded_per_cmd = 50, cropping_corners=None, save_fits = None): 
     """
     iterate through different camera frame rates and record a series of images for each
     this can be used for building darks or flats.
 
     Parameters
     ----------
-    camera : TYPE camera objection from FLI SDK.
+    zwfs : TYPE zwfs object holding camera object from FLI SDK.
         DESCRIPTION. Camera context from FLISDK. Initialized from context = FliSdk_V2.Init() 
     frame_rates : TYPE list like 
         DESCRIPTION. array holding different frame rates to iterate through
@@ -578,26 +578,31 @@ def scan_detector_framerates(camera, frame_rates, number_images_recorded_per_cmd
 
     """
     
+    #zwfs.set_camera_fps(600) 
+    zwfs.start_camera() # start camera
+
     data = fits.HDUList([]) 
     for fps in frame_rates:
         
-        camera = set_fsp_dit( camera, fps, tint=None) # set max dit (tint=None) for given fps
-        
-        FliSdk_V2.Start(camera) # start camera
+        zwfs.set_camera_fps(fps) # set max dit (tint=None) for given fps
 	
         time.sleep(1) # wait 1 second
         #tmp_fits = fits.PrimaryHDU( [FliSdk_V2.GetProcessedImageGrayscale16bNumpyArray(camera,-1)  for i in range(number_images_recorded_per_cmd)] )
+        img_list = []
+        for _ in range(number_images_recorded_per_cmd):
+            img_list.append( zwfs.get_image() )
+            time.sleep(0.01)
 
-        tmp_fits = fits.PrimaryHDU(  get_raw_images(camera, number_images_recorded_per_cmd, cropping_corners) )
+        tmp_fits = fits.PrimaryHDU(  img_list )
 
         
-        camera_info_dict = get_camera_info(camera)
+        camera_info_dict = get_camera_info(zwfs.camera)
         for k,v in camera_info_dict.items():
             tmp_fits.header.set(k,v)     
 
         data.append( tmp_fits )
 
-        FliSdk_V2.Stop(camera) # stop camera
+    zwfs.stop_camera()  # stop camera
     
     if save_fits!=None:
         if type(save_fits)==str:
