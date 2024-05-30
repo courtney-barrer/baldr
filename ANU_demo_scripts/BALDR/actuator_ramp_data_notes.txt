@@ -1,0 +1,108 @@
+recon_data structure 
+
+In [30]: [r.header['EXTNAME'] for r in recon_data]
+Out[30]: ['SEQUENCE_IMGS', 'DM_CMD_SEQUENCE', 'FPM_IN', 'FPM_OUT', 'FLAT_DM_CMD']
+
+===================
+'SEQUENCE_IMGS' = ZWFS images with FPM in for each actuator value   
+
+Headers : 
+EXTNAME = 'SEQUENCE_IMGS'                                                       
+HIERARCH timestamp = '2024-05-30 14:10:46.834996'                               
+CAMERA  = 'C-RED 3#01-00001de3a3eb#EDT-0'                                       
+HIERARCH camera_fps = 400.0                                                     
+HIERARCH camera_tint = '0.002002635'                                            
+HIERARCH #images per DM command = 2                                             
+HIERARCH take_median_of_images = T                                              
+HIERARCH cropping_corners_r1 = 149                                              
+HIERARCH cropping_corners_r2 = 277                                              
+HIERARCH cropping_corners_c1 = 90                                               
+HIERARCH cropping_corners_c2 = 218                                              
+CP_X1   =                  149                                                  
+CP_X2   =                  277                                                  
+CP_Y1   =                   90                                                  
+CP_Y2   =                  218                                                  
+HIERARCH in-poke max amp = 0.2                                                  
+HIERARCH out-poke max amp = -0.2                                                
+HIERARCH #ramp steps = 18                                                       
+SEQ0    = 'flatdm  '                                                            
+RESHAPE = '18-140-140'                                                          
+HIERARCH Nmodes_poked = 140                                                     
+NACT    =                  140         
+
+data :    
+recon_data['SEQUENCE_IMGS'].data.shape = [1 + number_actuators * number_ramp_values , number_of_images_per_cmd, Nx_pixels, Ny_pixels]  
+
+Note
+- first image corresponds to flat DM (no DM actuation). This is the same measurement of recon_data['FPM_IN'], although may be slightly different due to taking images at different times. 
+- if take_median_of_images then "number_of_images_per_cmd" column shape = 1, because we take the median of all these images, otherwise it will equal the specified "number_of_images_per_cmd" which is in the extension header.
+
+We should include a bias image here!!! How 
+
+=====================
+'DM_CMD_SEQUENCE'= DM commands corresponding to each image 
+
+In [38]: recon_data['DM_CMD_SEQUENCE'].header
+Out[38]: 
+XTENSION= 'IMAGE   '           / Image extension                                
+BITPIX  =                  -64 / array data type                                
+NAXIS   =                    2 / number of array dimensions                     
+NAXIS1  =                  140                                                  
+NAXIS2  =                 2521                                                  
+PCOUNT  =                    0 / number of parameters                           
+GCOUNT  =                    1 / number of groups                               
+HIERARCH timestamp = '2024-05-30 14:10:46.876238'                               
+EXTNAME = 'DM_CMD_SEQUENCE'    
+
+In [39]: recon_data['DM_CMD_SEQUENCE'].data.shape
+Out[39]: (1 + number_actuators * number_ramp_values , number_actuators)
+
+=====================
+'FPM_IN'= reference image with FPM in beam, no aberrations on DM
+
+In [43]: recon_data['FPM_IN'].header
+Out[43]: 
+XTENSION= 'IMAGE   '           / Image extension                                
+BITPIX  =                  -64 / array data type                                
+NAXIS   =                    2 / number of array dimensions                     
+NAXIS1  =                  128                                                  
+NAXIS2  =                  128                                                  
+PCOUNT  =                    0 / number of parameters                           
+GCOUNT  =                    1 / number of groups                               
+EXTNAME = 'FPM_IN  '   
+
+recon_data['FPM_IN'].data.shape = [Nx_pixels, Ny_pixels]  
+
+=====================
+'FPM_OUT'= reference image with FPM out of beam, no aberrations on DM
+
+In [43]: recon_data['FPM_OUT'].header
+Out[43]: 
+XTENSION= 'IMAGE   '           / Image extension                                
+BITPIX  =                  -64 / array data type                                
+NAXIS   =                    2 / number of array dimensions                     
+NAXIS1  =                  128                                                  
+NAXIS2  =                  128                                                  
+PCOUNT  =                    0 / number of parameters                           
+GCOUNT  =                    1 / number of groups                               
+EXTNAME = 'FPM_OUT  '   
+
+recon_data['FPM_OUT'].data.shape = [Nx_pixels, Ny_pixels]  
+
+=====================
+'FLAT_DM_CMD' = flat DM command used in this calibration file
+
+In [45]: recon_data['FLAT_DM_CMD'].header
+Out[45]: 
+XTENSION= 'IMAGE   '           / Image extension                                
+BITPIX  =                  -64 / array data type                                
+NAXIS   =                    1 / number of array dimensions                     
+NAXIS1  =                  140                                                  
+PCOUNT  =                    0 / number of parameters                           
+GCOUNT  =                    1 / number of groups                               
+EXTNAME = 'FLAT_DM_CMD' 
+
+
+recon_data['FLAT_DM_CMD'].data.shape = (number_actuators,)
+
+

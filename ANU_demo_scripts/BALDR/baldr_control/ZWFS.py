@@ -16,11 +16,13 @@ must do the logic to check and update state
 import numpy as np
 import os
 import glob 
-import bmc
 import sys  
 import pandas as pd 
 
 sys.path.insert(1, '/opt/FirstLightImaging/FliSdk/Python/demo/')
+sys.path.insert(1,'/opt/Boston Micromachines/lib/Python3/site-packages/')
+
+import bmc
 import FliSdk_V2
 from . import utilities as util
 

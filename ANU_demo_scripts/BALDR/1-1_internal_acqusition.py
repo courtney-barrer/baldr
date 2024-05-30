@@ -1,8 +1,14 @@
+
+import sys
+
+sys.path.insert(1, '/home/baldr/Documents/baldr/ANU_demo_scripts/BALDR/')
+
 from baldr_control import ZWFS
 from baldr_control import phase_control
 from baldr_control import pupil_control
 from baldr_control import utilities as util
 
+import pickle
 import numpy as np
 import matplotlib.pyplot as plt 
 import time 
@@ -68,6 +74,9 @@ pup_err_x, pup_err_y = pupil_ctrl.measure_dm_center_offset( zwfs, debug=True  )
 
 # 1.2) analyse pupil and decide if it is ok
 pupil_report = pupil_control.analyse_pupil_openloop( zwfs, debug = True, return_report = True)
+
+with open(data_path + f'pupil_classification_{tstamp}.pickle', 'wb') as handle:
+    pickle.dump(pupil_report, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 if pupil_report['pupil_quality_flag'] == 1: 
     # I think this needs to become attribute of ZWFS as the ZWFS object is always passed to pupil and phase control as an argunment to take pixtures and ctrl DM. The object controlling the camera should provide the info on where a controller object should look to apply control algorithm. otherwise pupil and phase controller would always need to talk to eachother. Also we will have 4 controllers in total

@@ -15,8 +15,9 @@ import corner
 
 import sys 
 sys.path.insert(1, '/opt/FirstLightImaging/FliSdk/Python/demo/')
+sys.path.insert(1,'/opt/Boston Micromachines/lib/Python3/site-packages/')
 import FliSdk_V2 
-
+import bmc
 # ============== UTILITY FUNCTIONS
 
 
