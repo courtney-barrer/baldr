@@ -1,3 +1,7 @@
+import sys
+
+sys.path.insert(1, '/home/baldr/Documents/baldr/ANU_demo_scripts/BALDR/')
+
 from baldr_control import ZWFS
 from baldr_control import phase_control
 from baldr_control import pupil_control
@@ -25,7 +29,10 @@ fps = 400
 DIT = 2e-3 #s integration time 
 
 sw = 8 # 8 for 12x12, 16 for 6x6 
-pupil_crop_region = [157-sw, 269+sw, 98-sw, 210+sw ] #[165-sw, 261+sw, 106-sw, 202+sw ] #one pixel each side of pupil.  #tight->[165, 261, 106, 202 ]  #crop region around ZWFS pupil [row min, row max, col min, col max] 
+# where do we expect the ZWFS pupil for this telescope - to reduce file size we crop the images manually here (since Baldr/Heimdallr always have to read out the full camera)
+#pupil_crop_region = [157-sw, 269+sw, 98-sw, 210+sw ] #[165-sw, 261+sw, 106-sw, 202+sw ] #one pixel each side of pupil.  #tight->[165, 261, 106, 202 ]  #crop region around ZWFS pupil [row min, row max, col min, col max] 
+readout_mode = '12x12' # '6x6'
+pupil_crop_region = pd.read_csv('/home/baldr/Documents/baldr/ANU_demo_scripts/BALDR/' + f'T1_pupil_region_{readout_mode}.csv',index_col=[0])['0'].values
 
 #init our ZWFS (object that interacts with camera and DM)
 zwfs = ZWFS.ZWFS(DM_serial_number='17DW019#053', cameraIndex=0, DMshapes_path = '/home/baldr/Documents/baldr/ANU_demo_scripts/BALDR/DMShapes/', pupil_crop_region=pupil_crop_region ) 

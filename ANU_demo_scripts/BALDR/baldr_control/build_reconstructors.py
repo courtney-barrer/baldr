@@ -16,11 +16,13 @@ import pandas as pd
 import aotools
 import pyzelda.utils.zernike as zernike
 import pickle
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+import datetime 
 
 # THIS NEEDS TO BE CONSISTENT EVERY WHERE !!
 # IT IS HOW IM IS BUILT - AND HOW WE PROCESS NEW SIGNALS 
-def err_signal(I, I0, N0):
-    e = ( I-I0 ) / np.sum( N0 )
+def err_signal(I, I0, N0, bias):
+    e = ( (I-bias) - (I0-bias) ) / np.sum( (N0-bias) )
     return( e )
 
 # below functions are also in the baldr_control module but 
@@ -190,19 +192,28 @@ def construct_command_basis( basis='Zernike', number_of_modes = 20, Nx_act_DM = 
 
 
 #%%
+# timestamp
+tstamp = datetime.datetime.now().strftime("%d-%m-%YT%H.%M.%S")
+debug= False #True 
+#========= USER INPUTS 
+
+usr_label = input('give a descriptive name for reconstructor fits file')
 
 # desired DM amplitude (normalized between 0-1) full DM pitch ~3.5um
 desired_amp = -0.05
+reconstruction_method = 'act_poke'
+
 
 fig_path = '/home/baldr/Documents/baldr/ANU_demo_scripts/BALDR/figures/' 
 data_path = '/home/baldr/Documents/baldr/ANU_demo_scripts/BALDR/data/' 
 
 # input file that holds pupil classification data
-pupil_classification_file = 'pupil_classification_30-05-2024T15.41.34.pickle'
+pupil_classification_file = 'pupil_classification_31-05-2024T15.26.52.pickle' #'pupil_classification_30-05-2024T15.41.34.pickle'
 
 # input file that holds poke images of DM -> ZWFS
-WFS_response_file = 'recon_data_30-05-2024T14.07.10.fits'
+WFS_response_file =  'recon_data_UT_SECONDARY_31-05-2024T15.36.42.fits' # 'recon_data_30-05-2024T14.07.10.fits'
 
+light_fits = False # do we want to discard intermediate results and assumptions in our reconstructor fits file? 
 
 # ============== READ IN RAMP DATA (TO BUILD RECONSTRUCTORS )
 ramp_data = fits.open( data_path + f'{WFS_response_file}'  )
@@ -228,27 +239,30 @@ Nact = ramp_data['DM_CMD_SEQUENCE'].shape[1] # should be 140 for Baldr!
 I0 =ramp_data['FPM_IN'].data # could also use first image in sequence: np.median( ramp_data['SEQUENCE_IMGS'].data[0], axis=0) #
 # reference image with flat DM and FPM out of the beam 
 N0 =  ramp_data['FPM_OUT'].data 
+# bias 
+bias = np.median( ramp_data['BIAS'].data ,axis=0 )
 
 # WFS response from pushing and pulling each actuator over given range
 # shape = [push_value, Nact, Nx, Ny]
 mode_ramp = np.median( ramp_data['SEQUENCE_IMGS'].data[1:].reshape(len(poke_amps), Nact, im_per_cmd, Nxpix, Nypix ) ,axis=2)
 
 # some debuggin checking plots 
-fig,ax = plt.subplots( 1,3,figsize=(15,5))
-ax[0].imshow( I0 )
-ax[0].set_title('flat DM, FPM IN')
+if debug:
+    fig,ax = plt.subplots( 1,3,figsize=(15,5))
+    ax[0].imshow( I0-bias )
+    ax[0].set_title('flat DM, FPM IN')
 
-ax[1].imshow( N0 )
-ax[1].set_title('flat DM, FPM OUT')
+    ax[1].imshow( N0-bias )
+    ax[1].set_title('flat DM, FPM OUT')
 
-actN = 65 # look at DM actuator 65
-# find where we get peak influence in WFS for small amplitude push
-peak_idx = np.unravel_index( np.argmax( abs(mode_ramp[Nsamp//2-1][actN] - I0 )) , I0.shape)
-ax[2].set_title(f'WFS response from act{actN} poke on pixel {peak_idx}')
-ax[2].plot(poke_amps,(mode_ramp[:,actN,:,:] - I0 )[:,*peak_idx] )
-ax[2].set_ylabel( r'$frac{I[x,y] - I0[x,y]}{N0[x,y]}$' )
-ax[2].set_xlabel('Normalized command amplitude')
-plt.show()
+    actN = 65 # look at DM actuator 65
+    # find where we get peak influence in WFS for small amplitude push
+    peak_idx = np.unravel_index( np.argmax( abs(mode_ramp[Nsamp//2-1][actN] - I0 )) , I0.shape)
+    ax[2].set_title(f'WFS response from act{actN} poke on pixel {peak_idx}')
+    ax[2].plot(poke_amps,(mode_ramp[:,actN,:,:] - I0 )[:,*peak_idx] )
+    ax[2].set_ylabel( r'$frac{I[x,y] - I0[x,y]}{N0[x,y]}$' )
+    ax[2].set_xlabel('Normalized command amplitude')
+    plt.show()
 
 
 # ============== READ IN PUPIL CLASSIFICATION DATA
@@ -274,8 +288,6 @@ plt.figure();plt.imshow( get_DM_command_in_2D( G.T[-1] )  );plt.show()
 """
 
 
-debug = True 
-Nmodes_keep = 30
 
 # define a filter for where our (circular) pupil is
 pupil_filter = pup_classification['pupil_pixel_filter']
@@ -288,7 +300,7 @@ for act_idx in range(mode_ramp.shape[1]):
     I = mode_ramp[amp_idx,act_idx ].reshape(-1)[pupil_filter]
 
     # our signal is (I-I0)/sum(N0) defined in err_signal function  
-    signal =  list( err_signal(I, I0=I0.reshape(-1)[pupil_filter], N0=N0.reshape(-1)[pupil_filter]))
+    signal =  list( err_signal(I, I0=I0.reshape(-1)[pupil_filter], N0=N0.reshape(-1)[pupil_filter], bias=bias.reshape(-1)[pupil_filter]))
     IM.append(signal )
     #IM.append( ( (mode_ramp[amp_idx,act_idx ][cp_x1: cp_x2 , cp_y1: cp_y2] - ref_im[cp_x1: cp_x2 , cp_y1: cp_y2])/N0 ).reshape(-1)  ) 
 
@@ -299,8 +311,6 @@ U,S,Vt = np.linalg.svd( IM )
 
 # estimate how many actuators are well registered 
 
-
-
 if debug : 
     #singular values
     plt.figure() 
@@ -309,44 +319,56 @@ if debug :
     plt.legend() 
     plt.xlabel('mode index')
     plt.ylabel('singular values')
-    
-    
-    # DM eigenmodes
-    plt.figure() 
-    plt.imshow( get_DM_command_in_2D( U.T[0] ) )
-    
+    plt.savefig(fig_path + f'singularvalues_{tstamp}.png',bbox_inches='tight',dpi=300)
+    plt.show()
     
     # THE IMAGE MODES 
+
     fig,ax = plt.subplots(8,8,figsize=(30,30))
     plt.subplots_adjust(hspace=0.1,wspace=0.1)
     for i,axx in enumerate(ax.reshape(-1)):
-        axx.imshow( Vt[i].reshape( cp_x2-cp_x1,cp_y2-cp_y1) )
-        axx.set_title(f'mode {i}, S={round(S[i])}')
+        # we filtered circle on grid, so need to put back in grid
+        tmp = pup_classification['pupil_pixel_filter'].copy()
+        vtgrid = np.zeros(tmp.shape)
+        vtgrid[tmp] = Vt[i]
+        axx.imshow( vtgrid.reshape( cp_x2-cp_x1,cp_y2-cp_y1) )
+        #axx.set_title(f'\n\n\nmode {i}, S={round(S[i]/np.max(S),3)}',fontsize=5)
+        axx.text( 10,10,f'{i}',color='w',fontsize=4)
+        axx.text( 10,20,f'S={round(S[i]/np.max(S),3)}',color='w',fontsize=4)
+        axx.axis('off')
         #plt.legend(ax=axx)
     plt.tight_layout()
-    
+    plt.savefig(fig_path + f'det_eignmodes_{tstamp}.png',bbox_inches='tight',dpi=300)
+    plt.show()
     
     # THE DM MODES 
     fig,ax = plt.subplots(8,8,figsize=(30,30))
     plt.subplots_adjust(hspace=0.1,wspace=0.1)
     for i,axx in enumerate(ax.reshape(-1)):
         axx.imshow( get_DM_command_in_2D( U.T[i] ) )
-        axx.set_title(f'mode {i}, S={round(S[i])}')
+        #axx.set_title(f'mode {i}, S={round(S[i]/np.max(S),3)}')
+        axx.text( 1,2,f'{i}',color='w',fontsize=6)
+        axx.text( 1,3,f'S={round(S[i]/np.max(S),3)}',color='w',fontsize=6)
+        axx.axis('off')
         #plt.legend(ax=axx)
     plt.tight_layout()
+    plt.savefig(fig_path + f'dm_eignmodes_{tstamp}.png',bbox_inches='tight',dpi=300)
+    plt.show()
+
+minMode_i = int(input('what is the minimum (int) eigenmode you want to keep in control matrix (enter integer, hint 0 or 1)'))
+maxMode_i = int(input('up to what eigenmode do you want to keep in control matrix (enter integer, hint 20-50)'))
 
 
 smat = np.zeros((U.shape[0], Vt.shape[0]), dtype=float)
-S_filt = [s if i < Nmodes_keep else 0 for i,s in enumerate(S)]
+S_filt = [s if ((i < maxMode_i) & (i>minMode_i)) else 0 for i,s in enumerate(S)]
 smat[:len(S),:len(S)] = np.diag(S_filt)
 
 IM_filt = U @ smat @ Vt
 
 CM = 2*poke_amps[amp_idx] * np.linalg.pinv( IM_filt )
 
-
+# tip/tilt index in the DM mode space basis
 TT_idx = [0,1]
-
 #G : cmd -> mode G
 Ginv_TT = Ginv.copy()
 for i in range(len(Ginv_TT)):
@@ -363,25 +385,118 @@ R_TT = G @ (Ginv_TT @ CM.T )
 
 R_HO = G @ (Ginv_HO @ CM.T )
 
-act_idx = 65
-fig,ax = plt.subplots(1,3)
-ax[0].set_title( 'reconstruction with CM')
-ax[0].imshow( get_DM_command_in_2D( ramp_data[1].data[act_idx] ))
 
-ax[1].set_title( 'reconstruction with CM')
-ax[1].imshow( get_DM_command_in_2D( CM.T @ IM[act_idx] ) )
-
-ax[2].set_title( 'reconstruction with R_HO')
-ax[2].imshow( get_DM_command_in_2D( R_HO @ IM[act_idx]  ) )
-
-
-im_list = [get_DM_command_in_2D( ramp_data[1].data[act_idx+1] - ramp_data[1].data[0] ), get_DM_command_in_2D( CM.T @ IM[act_idx] ), get_DM_command_in_2D( R_HO @ IM[act_idx]  ) ]
-xlabel_list = ['','','']
-ylabel_list = ['','','']
-title_list = ['DM aberration','reconstruction with CM', 'reconstruction with R_HO']
-cbar_label_list = ['normalized cmds','normalized cmds','normalized cmds' ]
-nice_heatmap_subplots( im_list , xlabel_list, ylabel_list, title_list,cbar_label_list, fontsize=15, cbar_orientation = 'bottom', axis_off=True, savefig=None)
+if debug:
+    act_idx = 65
+    #check the reconstructions in CM and R_HO
+    im_list = [get_DM_command_in_2D( ramp_data[1].data[act_idx+1] - ramp_data[1].data[0] ), get_DM_command_in_2D( CM.T @ IM[act_idx] ), get_DM_command_in_2D( R_HO @ IM[act_idx]  ) ]
+    xlabel_list = ['','','']
+    ylabel_list = ['','','']
+    title_list = ['DM aberration','reconstruction with CM', 'reconstruction with R_HO']
+    cbar_label_list = ['normalized cmds','normalized cmds','normalized cmds' ]
+    nice_heatmap_subplots( im_list , xlabel_list, ylabel_list, title_list,cbar_label_list, fontsize=15, cbar_orientation = 'bottom', axis_off=True, savefig=None)
+    plt.show()
 
 
+# see pupil region classifications 
+if debug:
+    # If you want to check
+    fig,ax = plt.subplots(1,3)
+    ax[0].imshow( pup_classification['pupil_pixel_filter'].reshape( cp_x2-cp_x1, cp_y2-cp_y1) )
+    ax[1].imshow( pup_classification['outside_pupil_pixel_filter'].reshape( cp_x2-cp_x1, cp_y2-cp_y1) )
+    ax[2].imshow( pup_classification['secondary_pupil_pixel_filter'].reshape( cp_x2-cp_x1, cp_y2-cp_y1) )
+    for axx,l in zip(ax, ['inside pupil','outside pupil','secondary']):
+        axx.set_title(l)
+    plt.show()
+
+
+#%% WRITE TO FITS 
+
+# headers to copy from ramp_data 
+headers2copy = ['CAMERA','camera_fps','camera_tint','camera_gain',\
+'cropping_corners_r1','cropping_corners_r2','cropping_corners_c1','cropping_corners_c2']
+
+info_fits = fits.PrimaryHDU( [] ) #[pupil_classification_file,WFS_response_file] )
+
+info_fits.header.set('EXTNAME','INFO')
+info_fits.header.set('IM_construction_method',f'{reconstruction_method}')
+info_fits.header.set('DM poke amplitude[normalized]',f'{poke_amps[amp_idx]}')
+info_fits.header.set('what is?','names of input files for building IM')
+#info_fits.header.set('pupil_classification_file',f'{pupil_classification_file }')
+#info_fits.header.set('WFS_response_file',f'{WFS_response_file}')
+for h in headers2copy:
+    info_fits.header.set(h, ramp_data['SEQUENCE_IMGS'].header[h])
+
+
+# CHECK WHAT MIKE WROTE IN DOCUMENT FOR WHAT WE WANT HERE
+pupil_fits = fits.PrimaryHDU( pup_classification['pupil_pixels']  )
+# I0.reshape(-1)[pup_classification['pupil_pixels'] ]
+pupil_fits.header.set('what is?','pixels_inside_pupil')
+pupil_fits.header.set('EXTNAME','pupil_pixels')
+
+# secondary 
+secondary_fits = fits.PrimaryHDU( pup_classification['secondary_pupil_pixels']  )
+# I0.reshape(-1)[pup_classification['pupil_pixels'] ]
+secondary_fits.header.set('what is?','pixels_inside_secondary obstruction')
+secondary_fits.header.set('EXTNAME','secondary_pixels')
+
+
+outside_fits = fits.PrimaryHDU( pup_classification['outside_pupil_pixels'] )
+outside_fits.header.set('what is?','pixels_outside_pupil')
+outside_fits.header.set('EXTNAME','outside_pixels')
+
+
+bias_fits = fits.PrimaryHDU( bias )
+bias_fits.header.set('what is?','bias used in IM')
+bias_fits.header.set('EXTNAME','bias')
+
+
+U_fits = fits.PrimaryHDU( U )
+U_fits.header.set('what is?','U in SVD of IM')
+U_fits.header.set('EXTNAME','U')
+
+S_fits = fits.PrimaryHDU( S )
+S_fits.header.set('what is?','singular values in SVD of IM')
+S_fits.header.set('EXTNAME','S')
+
+Vt_fits = fits.PrimaryHDU( Vt )
+Vt_fits.header.set('what is?','Vt in SVD of IM')
+Vt_fits.header.set('EXTNAME','Vt')
+
+Sfilt_fits = fits.PrimaryHDU( S_filt )
+Sfilt_fits.header.set('what is?','filtered singular values used for CM')
+Sfilt_fits.header.set('EXTNAME','Sfilt')
+
+CM_fits = fits.PrimaryHDU( CM )
+CM_fits.header.set('what is?','filtered control matrix (CM)')
+CM_fits.header.set('EXTNAME','CM')
+
+RTT_fits = fits.PrimaryHDU( R_TT )
+RTT_fits.header.set('what is?','tip-tilt reconstructor')
+RTT_fits.header.set('EXTNAME','R_TT')
+
+RHO_fits = fits.PrimaryHDU( R_HO )
+RHO_fits.header.set('what is?','higher-oder reconstructor')
+RHO_fits.header.set('EXTNAME','R_HO')
+
+fits_list = [info_fits, bias_fits, U_fits, S_fits, Vt_fits, Sfilt_fits,\
+               CM_fits, RTT_fits, RHO_fits, ramp_data['FPM_IN'],\
+               ramp_data['FPM_OUT'],pupil_fits, secondary_fits, outside_fits]
+
+
+# 
+reconstructor_fits = fits.HDUList( [] )
+for f in fits_list[:-1]:
+    reconstructor_fits.append( f )
+
+
+if not light_fits:
+    G_fits = fits.PrimaryHDU( G )
+    G_fits.header.set('what is?','DM modal basis used in TT and HO projection')
+    G_fits.header.set('EXTNAME','G')
+    reconstructor_fits.append( G_fits )
+
+
+reconstructor_fits.writeto( data_path + f'RECONSTRUCTORS_{usr_label}_DIT-{round(float(info_fits.header["camera_tint"]),6)}_gain_{info_fits.header["camera_gain"]}_{tstamp}.fits',overwrite=True )  #data_path + 'ZWFS_internal_calibration.fits'
 
 

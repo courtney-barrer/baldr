@@ -17,6 +17,8 @@ import sys
 sys.path.insert(1, '/opt/FirstLightImaging/FliSdk/Python/demo/')
 sys.path.insert(1,'/opt/Boston Micromachines/lib/Python3/site-packages/')
 import FliSdk_V2 
+import FliCredThree
+
 import bmc
 # ============== UTILITY FUNCTIONS
 
@@ -537,17 +539,25 @@ def apply_sequence_to_DM_and_record_images(zwfs, DM_command_sequence, number_ima
 
 
 def get_camera_info(camera):
+    if FliSdk_V2.IsCredOne(camera):
+        cred = FliCredThree.FliCredThree() #cred1 object 
+
+    elif FliSdk_V2.IsCredThree(camera):
+        cred = FliCredThree.FliCredThree() #cred3 object 
     camera_info_dict = {} 
     # query camera settings 
     fps_res, fps_response = FliSdk_V2.FliSerialCamera.GetFps(camera)
     tint_res, tint_response = FliSdk_V2.FliSerialCamera.SendCommand(camera, "tint raw")
-    
+  
+    # gain
+    gain = cred.GetConversionGain(camera)[1]
+
     #camera headers
     camera_info_dict['timestamp'] = str(datetime.datetime.now()) 
     camera_info_dict['camera'] = FliSdk_V2.GetCurrentCameraName(camera) 
     camera_info_dict['camera_fps'] = fps_response
     camera_info_dict['camera_tint'] = tint_response
-    
+    camera_info_dict['camera_gain'] = gain
     return(camera_info_dict)
 
     
@@ -629,7 +639,7 @@ def GET_BDR_RECON_DATA_INTERNAL(zwfs, number_amp_samples = 18, amp_max = 0.2, nu
 
     zwfs.dm.send_data(flat_dm_cmd) 
     _ = input('MANUALLY MOVE PHASE MASK OUT OF BEAM, PRESS ENTER TO BEGIN' )
-    watch_camera(zwfs, frames_to_watch = 50, time_between_frames=0.05)
+    watch_camera(zwfs, frames_to_watch = 70, time_between_frames=0.05)
 
     N0_list = []
     for _ in range(number_images_recorded_per_cmd):
@@ -640,21 +650,37 @@ def GET_BDR_RECON_DATA_INTERNAL(zwfs, number_amp_samples = 18, amp_max = 0.2, nu
 
     # ======== reference image with FPM IN
     _ = input('MANUALLY MOVE PHASE MASK BACK IN, PRESS ENTER TO BEGIN' )
-    watch_camera(zwfs, frames_to_watch = 50, time_between_frames=0.05)
+    watch_camera(zwfs, frames_to_watch = 70, time_between_frames=0.05)
 
     I0_list = []
     for _ in range(number_images_recorded_per_cmd):
         I0_list.append( zwfs.get_image(  ) ) #REFERENCE INTENSITY WITH FPM IN
     I0 = np.median( I0_list, axis = 0 ) 
-        
+
+    # ======== BIAS FRAME
+    _ = input('COVER THE DETECTOR FOR A BIAS FRAME' )
+
+
+    watch_camera(zwfs, frames_to_watch = 50, time_between_frames=0.05)
+
+    BIAS_list = []
+    for _ in range(100):
+        time.sleep(0.05)
+        BIAS_list.append( zwfs.get_image(  ) ) #REFERENCE INTENSITY WITH FPM IN
+    #I0 = np.median( I0_list, axis = 0 ) 
+
     #====== make references fits files
     I0_fits = fits.PrimaryHDU( I0 )
     N0_fits = fits.PrimaryHDU( N0 )
+    BIAS_fits = fits.PrimaryHDU( BIAS_list )
     I0_fits.header.set('EXTNAME','FPM_IN')
     N0_fits.header.set('EXTNAME','FPM_OUT')
+    BIAS_fits.header.set('EXTNAME','BIAS')
 
     flat_DM_fits = fits.PrimaryHDU( flat_dm_cmd )
     flat_DM_fits.header.set('EXTNAME','FLAT_DM_CMD')
+
+    _ = input('PRESS ENTER WHEN READY TO BUILD IM' )
 
     #make_fits
 
@@ -676,6 +702,7 @@ def GET_BDR_RECON_DATA_INTERNAL(zwfs, number_amp_samples = 18, amp_max = 0.2, nu
     # append FPM IN and OUT references (note FPM in reference is also first entry in recon_data so we can compare if we want!) 
     raw_recon_data.append( I0_fits ) 
     raw_recon_data.append( N0_fits ) 
+    raw_recon_data.append( BIAS_fits )
     raw_recon_data.append( flat_DM_fits )
 
     if save_fits != None:  
