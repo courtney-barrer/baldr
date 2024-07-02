@@ -115,7 +115,8 @@ def construct_command_basis( basis='Zernike', number_of_modes = 20, Nx_act_DM = 
             M2C = np.array( bmcdm_basis_list ).T # take transpose to make columns the modes in command space.
 
     elif basis == 'Zonal': 
-        M2C = np.eye(Nx_act_DM) # we just consider this over all actuators (so defaults to 140 modes) 
+        #hardcoded for BMC multi3.5 DM (140 actuators)
+        M2C = np.eye( 140 ) # we just consider this over all actuators (so defaults to 140 modes) 
         # we filter zonal basis in the eigenvectors of the control matrix. 
  
     #elif basis == 'Sensor_Eigenmodes': this is done specifically in a phase_control.py function - as it needs a interaction matrix covariance first 
@@ -298,7 +299,7 @@ def block_sum(ar, fact): # sums over subwindows of a 2D array
 
 
 # ========== PLOTTING STANDARDS 
-def nice_heatmap_subplots( im_list , xlabel_list, ylabel_list, title_list,cbar_label_list, fontsize=15, cbar_orientation = 'bottom', axis_off=True, savefig=None):
+def nice_heatmap_subplots( im_list , xlabel_list, ylabel_list, title_list,cbar_label_list, fontsize=15, cbar_orientation = 'bottom', axis_off=True, vlims=None, savefig=None):
 
     n = len(im_list)
     fs = fontsize
@@ -308,7 +309,10 @@ def nice_heatmap_subplots( im_list , xlabel_list, ylabel_list, title_list,cbar_l
         ax1 = fig.add_subplot(int(f'1{n}{a+1}'))
         ax1.set_title(title_list[a] ,fontsize=fs)
 
-        im1 = ax1.imshow(  im_list[a] )
+        if vlims!=None:
+            im1 = ax1.imshow(  im_list[a] , vmin = vlims[a][0], vmax = vlims[a][1])
+        else:
+            im1 = ax1.imshow(  im_list[a] )
         ax1.set_title( title_list[a] ,fontsize=fs)
         ax1.set_xlabel( xlabel_list[a] ,fontsize=fs) 
         ax1.set_ylabel( ylabel_list[a] ,fontsize=fs) 
@@ -320,12 +324,16 @@ def nice_heatmap_subplots( im_list , xlabel_list, ylabel_list, title_list,cbar_l
         if cbar_orientation == 'bottom':
             cax = divider.append_axes('bottom', size='5%', pad=0.05)
             cbar = fig.colorbar( im1, cax=cax, orientation='horizontal')
+                
         elif cbar_orientation == 'top':
             cax = divider.append_axes('top', size='5%', pad=0.05)
             cbar = fig.colorbar( im1, cax=cax, orientation='horizontal')
+                
         else: # we put it on the right 
             cax = divider.append_axes('right', size='5%', pad=0.05)
-            cbar = fig.colorbar( im1, cax=cax, orientation='vertical')           
+            cbar = fig.colorbar( im1, cax=cax, orientation='vertical')  
+        
+   
         cbar.set_label( cbar_label_list[a], rotation=0,fontsize=fs)
         cbar.ax.tick_params(labelsize=fs)
     if savefig!=None:

@@ -21,8 +21,16 @@ import datetime
 
 # THIS NEEDS TO BE CONSISTENT EVERY WHERE !!
 # IT IS HOW IM IS BUILT - AND HOW WE PROCESS NEW SIGNALS 
-def err_signal(I, I0, N0, bias):
+"""def err_signal(I, I0, N0, bias):
     e = ( (I-bias) - (I0-bias) ) / np.sum( (N0-bias) )
+    return( e )
+"""
+def err_signal(I, I0, bias, norm_flux=None):
+    #I0 should already have bias subtracted and be normalized.
+    if norm_flux == None:
+        e = (I-bias) / np.sum( (I-bias) ) - I0
+    else:
+        e =  (I-bias) / norm_flux - I0
     return( e )
 
 # below functions are also in the baldr_control module but 
@@ -107,7 +115,6 @@ def construct_command_basis( basis='Zernike', number_of_modes = 20, Nx_act_DM = 
      
     """
 
-   
     # shorter notations
     #Nx_act = DM.num_actuators_width() # number of actuators across diameter of DM.
     #Nx_act_basis = actuators_across_diam
@@ -298,20 +305,22 @@ for act_idx in range(mode_ramp.shape[1]):
     # each row is flattened (I-I0) / N0 signal
     # intensity from a given actuator push
     I = mode_ramp[amp_idx,act_idx ].reshape(-1)[pupil_filter]
-
+    i0 = I0.reshape(-1)[pupil_filter]
+    n0 = N0.reshape(-1)[pupil_filter]
+    bi = bias.reshape(-1)[pupil_filter]
     # our signal is (I-I0)/sum(N0) defined in err_signal function  
-    signal =  list( err_signal(I, I0=I0.reshape(-1)[pupil_filter], N0=N0.reshape(-1)[pupil_filter], bias=bias.reshape(-1)[pupil_filter]))
+    signal =  list( err_signal(I, I0=i0, N0=n0, bias=bi))
     IM.append(signal )
     #IM.append( ( (mode_ramp[amp_idx,act_idx ][cp_x1: cp_x2 , cp_y1: cp_y2] - ref_im[cp_x1: cp_x2 , cp_y1: cp_y2])/N0 ).reshape(-1)  ) 
 
-plt.figure();plt.imshow( np.cov( IM ) ) ; plt.show()
+#plt.figure();plt.imshow( np.cov( IM ) ) ; plt.show()
 
 U,S,Vt = np.linalg.svd( IM )
 
 
 # estimate how many actuators are well registered 
 
-if debug : 
+if 1:# debug : 
     #singular values
     plt.figure() 
     plt.loglog(S/np.max(S))
@@ -486,7 +495,7 @@ fits_list = [info_fits, bias_fits, U_fits, S_fits, Vt_fits, Sfilt_fits,\
 
 # 
 reconstructor_fits = fits.HDUList( [] )
-for f in fits_list[:-1]:
+for f in fits_list:
     reconstructor_fits.append( f )
 
 

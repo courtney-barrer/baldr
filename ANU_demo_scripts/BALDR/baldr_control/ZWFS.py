@@ -106,15 +106,16 @@ class ZWFS():
         # this is placed as an attribute here since from 1 image we will have 4 pupils 
         # which will control 4 different DMs.
         # So we need to define where to find each pupil for any given image taken. 
-        if pupil_crop_region == None:
+        if not hasattr(pupil_crop_region, '__len__'):
+            #pupil_crop_region == None:
             pupil_crop_region = [None, None, None, None] # no cropping of the image
         elif hasattr(pupil_crop_region, '__len__'):
             if len( pupil_crop_region ) == 4:
-                if all(isinstance(x, int) for x in pupil_crop_region):
-                    self.pupil_crop_region = pupil_crop_region  # [row1 , row2, col1 , col2]
-                else:
-                    self.pupil_crop_region = [None, None, None, None]
-                    print('pupil_crop_region has INVALID entries, it needs to be integers')
+                #if all(isinstance(x, int) for x in pupil_crop_region):
+                self.pupil_crop_region = pupil_crop_region  # [row1 , row2, col1 , col2]
+                #else:
+                #    self.pupil_crop_region = [None, None, None, None]
+                #    print('pupil_crop_region has INVALID entries, it needs to be integers')
             else:
                 self.pupil_crop_region = [None, None, None, None]
                 print('pupil_crop_region has INVALID length, it needs to have length = 4')
@@ -192,21 +193,21 @@ class ZWFS():
         
         #define pixel coordinates in this cropped region  
         r1, r2, c1, c2 = self.pupil_crop_region
-        if (self.pupil_crop_region != [None, None, None, None]) & (self.pixelation_factor == None) :
+        if (np.all(self.pupil_crop_region != [None, None, None, None])) & (self.pixelation_factor == None) :
             self.row_coords = np.linspace( (r1 - r2)/2 , (r2 - r1)/2, r2-r1)  #rows
             self.col_coords = np.linspace( (c1 - c2)/2 , (c2 - c1)/2, c2-c1)  #columns
-        elif (self.pupil_crop_region != [None, None, None, None]) & (self.pixelation_factor != None) :
+        elif (np.all(self.pupil_crop_region != [None, None, None, None])) & (self.pixelation_factor != None) :
             pf = self.pixelation_factor
             self.row_coords = np.linspace( 1/pf * (r1 - r2)/2 , 1/pf * (r2 - r1)/2, int(1/pf * (r2-r1) ) )  #rows
             self.col_coords = np.linspace( 1/pf * (c1 - c2)/2 , 1/pf * (c2 - c1)/2, int(1/pf * (c2-c1) ) )  #columns
 
-        elif (self.pupil_crop_region == [None, None, None, None]) & (self.pixelation_factor == None) :# full image 
+        elif np.all((self.pupil_crop_region == [None, None, None, None])) & (self.pixelation_factor == None) :# full image 
             r1 = 0; c1 = 0
             c2, r2 = FliSdk_V2.GetCurrentImageDimension(self.camera)
             self.row_coords = np.linspace( (r1 - r2)/2 , (r2 - r1)/2, r2-r1)  #rows
             self.col_coords = np.linspace( (c1 - c2)/2 , (c2 - c1)/2, c2-c1)  #columns
 
-        elif (self.pupil_crop_region == [None, None, None, None]) & (self.pixelation_factor != None) :
+        elif np.all((self.pupil_crop_region == [None, None, None, None])) & (self.pixelation_factor != None) :
             r1 = 0; c1 = 0
             c2, r2 = FliSdk_V2.GetCurrentImageDimension(self.camera)
             pf = self.pixelation_factor

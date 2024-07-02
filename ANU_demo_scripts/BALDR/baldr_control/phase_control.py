@@ -234,7 +234,7 @@ class phase_controller_1():
 
         # filter number of modes in eigenmode space when using zonal control  
         if self.config['basis'] == 'Zonal': # then we filter number of modes in the eigenspace of IM 
-            S_filt = S > S[ self.config['number_of_controlled_modes'] ] # we consider the highest eigenvalues/vectors up to the number_of_controlled_modes
+            S_filt = S > np.min(S) # we consider the highest eigenvalues/vectors up to the number_of_controlled_modes
             Sigma = np.zeros( np.array(IM).shape, float)
             np.fill_diagonal(Sigma, S[S_filt], wrap=False) #
         else: # else #modes decided by the construction of modal basis. We may change their gains later
