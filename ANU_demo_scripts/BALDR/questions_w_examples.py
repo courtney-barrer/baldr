@@ -125,6 +125,14 @@ ax[1].set_title('post bias corr.')
 plt.show() 
 
 
+# tag images to count frames
+#   This the first and second pixels of the images are used to store a frame counter 
+#   that increments by one for each frame acquired from the sensor. These two pixels 
+#   are treated together as a 32 bits number, which will represent each specific frame’s number. 
+#   The third pixel value depends on the current readout mode of the camera.
+fli.FliSerialCamera.SendCommand(camera, “set imagetags on”)
+
+
 """
 fli.FliSerialCamera.SendCommand(camera, "set sensitivity medium")
 img_med_sens = fli.GetRawImageAsNumpyArray( camera , -1)
@@ -145,6 +153,51 @@ testcrop = [("col1", 70),
  ("cred1Rows", ctypes.c_bool * 256)]
 """
 
+
+### INIT DM 
+
+dm = bmc.BmcDm() # init DM object
+err_code = dm.open_dm('17DW019#053') # open DM
+if err_code:
+    print('Error initializing DM')
+    raise Exception(dm.error_string(err_code))
+
+
+### LATANCY TEST 
+
+#actuator to poke
+act_idx = 65
+#differential amplitude to apply with poke
+damp = 0.1
+#DM cmds to swap between 
+cmd_1 = 0.5 * np.ones(140)
+cmd_2 = 0.5 * np.ones(140)
+cmd_2[act_idx] =  damp
+cmd_list = [cmd_1,cmd_2]
+imgs = [] #list to hold images
+t0=[]
+t1=[]
+j=0 # used to calculate flag
+flag=0 #jumps between 1, 0 for on, off pokes
+# get reference images with the DM in each state 
+dm.send_data(cmd_list[0])
+time.sleep(.5)
+ref_img_1 = fli.GetRawImageAsNumpyArray( camera , -1) 
+time.sleep(.5)
+dm.send_data(cmd_list[0])
+time.sleep(.5)
+ref_img_2 = fli.GetRawImageAsNumpyArray( camera , -1) 
+
+for i in range(1000):
+    t0_list.append( time.time() ) 
+    img_list.append( fli.GetRawImageAsNumpyArray( camera , -1) ) 
+    flag_list.append(flag) 
+    if np.mod(i,10): # change DM state every 10 iterations
+        j+=1
+        flag = np.mod(j,2)  
+        dm.send_data(cmd_list[flag])
+    
+    t1_list.append( time.time() )
 
 
 
