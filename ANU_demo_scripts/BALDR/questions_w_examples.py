@@ -12,8 +12,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 import time 
 import sys 
+import pickle 
 sys.path.insert(1, '/opt/FirstLightImaging/FliSdk/Python/demo/')
+sys.path.insert(1,'/opt/Boston Micromachines/lib/Python3/site-packages/')
 import FliSdk_V2 as fli
+import bmc
+
+data_path = '/home/baldr/Documents/baldr/ANU_demo_scripts/BALDR/data/' 
 
 
 """
@@ -98,10 +103,24 @@ print( f'max int {1e3 * float(minDIT)}ms')
 # 3ms integration time (3.3kHz)
 fli.FliSerialCamera.SendCommand(camera, "set tint " + str(0.0003))
 
-# 2000Hz frame rate 
+# 2800Hz frame rate 
 fli.FliSerialCamera.SetFps(camera, 2800)
 
 print( 'fps = ', fli.FliSerialCamera.GetFps(camera) ) 
+
+# tag images to count frames
+#   This the first and second pixels of the images are used to store a frame counter 
+#   that increments by one for each frame acquired from the sensor. These two pixels 
+#   are treated together as a 32 bits number, which will represent each specific frame’s number. 
+#   The third pixel value depends on the current readout mode of the camera.
+fli.FliSerialCamera.SendCommand(camera, "set imagetags on")
+# lets see how many iterations it takes to get new frame 
+frame_tag_test_list = []
+for i in range(30):
+    frame_tag_test_list.append( fli.GetRawImageAsNumpyArray( camera , -1) ) 
+
+print( 'frame per iteration of taking image:', [f[0,0] for f in frame_tag_test_list] )
+
 #new cropped image with 3.3kHz frame rate  
 test = fli.GetRawImageAsNumpyArray( camera , -1)
 
@@ -125,12 +144,7 @@ ax[1].set_title('post bias corr.')
 plt.show() 
 
 
-# tag images to count frames
-#   This the first and second pixels of the images are used to store a frame counter 
-#   that increments by one for each frame acquired from the sensor. These two pixels 
-#   are treated together as a 32 bits number, which will represent each specific frame’s number. 
-#   The third pixel value depends on the current readout mode of the camera.
-fli.FliSerialCamera.SendCommand(camera, “set imagetags on”)
+
 
 
 """
@@ -168,38 +182,82 @@ if err_code:
 #actuator to poke
 act_idx = 65
 #differential amplitude to apply with poke
-damp = 0.1
+damp = 0.15
 #DM cmds to swap between 
 cmd_1 = 0.5 * np.ones(140)
 cmd_2 = 0.5 * np.ones(140)
-cmd_2[act_idx] =  damp
+cmd_2[act_idx] -= damp
 cmd_list = [cmd_1,cmd_2]
-imgs = [] #list to hold images
-t0=[]
-t1=[]
-j=0 # used to calculate flag
-flag=0 #jumps between 1, 0 for on, off pokes
+
 # get reference images with the DM in each state 
 dm.send_data(cmd_list[0])
 time.sleep(.5)
-ref_img_1 = fli.GetRawImageAsNumpyArray( camera , -1) 
+I0 = fli.GetRawImageAsNumpyArray( camera , -1) 
 time.sleep(.5)
-dm.send_data(cmd_list[0])
+ref_img_1 = fli.GetRawImageAsNumpyArray( camera , -1) 
+dm.send_data(cmd_list[1])
 time.sleep(.5)
 ref_img_2 = fli.GetRawImageAsNumpyArray( camera , -1) 
+
+# check reference images 
+fig, ax = plt.subplots(1,2)
+ax[0].imshow( ref_img_1 - I0  )
+ax[0].set_title('flat')
+ax[1].imshow( ref_img_2 - I0 )
+ax[1].set_title('poke')
+plt.show()
+
+img_list = [] #list to hold images
+t0_list=[]
+t1_list=[]
+flag_list=[]
+
+j=0 # used to calculate flag
+flag=0 #jumps between 1, 0 for on, off pokes
 
 for i in range(1000):
     t0_list.append( time.time() ) 
     img_list.append( fli.GetRawImageAsNumpyArray( camera , -1) ) 
     flag_list.append(flag) 
-    if np.mod(i,10): # change DM state every 10 iterations
+    #print(flag_list[-1])
+    if np.mod(i,10)==0: # change DM state every 10 iterations
         j+=1
         flag = np.mod(j,2)  
+        #print(i, j, flag) 
         dm.send_data(cmd_list[flag])
     
     t1_list.append( time.time() )
 
 
+
+# peak pixel change for act 65 around row 77,  col 97
+pv = np.array([i[77,97] - I0[77,97] for i in img_list])
+
+i0 = 700
+i1 = 760 
+t0 = np.array(t0_list[i0:i1 ])-t0_list[0]
+t1 = np.array(t1_list[i0:i1])-t0_list[0]
+plt.plot(t0, pv[i0:i1]/np.max(pv[:100]) , label='pixel val')
+plt.plot( t0, flag_list[i0:i1] ,'.', label='flag begin')
+plt.plot( t1, flag_list[i0:i1] ,'.', label='flag end')
+start_triggers = t0[np.where( np.diff( flag_list[i0:i1] ) )[0]]
+end_triggers = t1[np.where( np.diff( flag_list[i0:i1] ) )[0]]
+for trig in start_triggers:
+    plt.axvline( trig ,color='green') 
+for trig in end_triggers:
+    plt.axvline( trig , color='red') 
+plt.ylim([-0.2,1.2])
+plt.legend()
+plt.show()
+
+
+out_dict = {'t0':list(np.array(t0_list)-t0_list[0]), 't1':list(np.array(t1_list)-t1_list[0]),'I0':I0, 'img_list':img_list, 'flag_list':flag_list} 
+
+with open(data_path + 'latency_test_2.pickle','wb') as handle:
+    pickle.dump(out_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+print( 'mean delta t = ' , np.mean(np.diff(out_dict['t0'])) )
+print( 'median delta t = ' , np.median(np.diff(out_dict['t0'])) )
 
 
 #testcrop = fli.GetCroppingState(camera)[-1]._fields_
