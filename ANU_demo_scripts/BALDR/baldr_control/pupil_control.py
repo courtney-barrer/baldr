@@ -161,7 +161,7 @@ def analyse_pupil_openloop( zwfs, debug = True, return_report = True, symmetric_
         pupil_diam_y = np.sum( diam_filter_y )
         pupil_diam = 0.5*(pupil_diam_x+pupil_diam_y) 
 
-        # 
+        #  warning! - circle_centre=(x_pupil_center, y_pupil_center) definitions of x,y may be inverted...CHECK THIS.
         inside_pup = util.circle(radius=pupil_diam//2, size=img.shape, circle_centre=(x_pupil_center, y_pupil_center), origin='middle')
 
         
