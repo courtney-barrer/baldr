@@ -296,6 +296,15 @@ class ZWFS():
     def set_camera_fps(self, fps):
         FliSdk_V2.FliSerialCamera.SetFps(self.camera, fps)
 
+    def set_camera_cropping(self, r1, r2, c1, c2 ): 
+        FliSdk_V2.FliSerialCamera.SendCommand(self.camera, "set cropping off")
+        # cropped columns must be multiple of 32 - multiple of 32 minus 1
+        #e.g. fli.FliSerialCamera.SendCommand(camera, "set cropping columns 64-287")
+        FliSdk_V2.FliSerialCamera.SendCommand(self.camera, f"set cropping columns {c1}-{c2}")
+        # cropped rows must be multiple of 4 - multiple of 4 minus 1
+        #e.g. fli.FliSerialCamera.SendCommand(camera, "set cropping rows 120-299")
+        FliSdk_V2.FliSerialCamera.SendCommand(self.camera, f"set cropping rows {r1}-{r2}")
+        FliSdk_V2.FliSerialCamera.SendCommand(self.camera, "set cropping on")
     
     def update_pupil_pixel_filter(self): 
         # updates self.pupil_pixel_filter, self.pupil_pixels, 

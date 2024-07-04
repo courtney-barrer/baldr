@@ -553,6 +553,11 @@ def get_camera_info(camera):
     elif FliSdk_V2.IsCredThree(camera):
         cred = FliCredThree.FliCredThree() #cred3 object 
     camera_info_dict = {} 
+    
+    # cropping rows 
+    _, cropping_rows = FliSdk_V2.FliSerialCamera.SendCommand(camera, "cropping rows")
+    _, cropping_columns =  FliSdk_V2.FliSerialCamera.SendCommand(camera, "cropping columns")
+
     # query camera settings 
     fps_res, fps_response = FliSdk_V2.FliSerialCamera.GetFps(camera)
     tint_res, tint_response = FliSdk_V2.FliSerialCamera.SendCommand(camera, "tint raw")
@@ -566,6 +571,9 @@ def get_camera_info(camera):
     camera_info_dict['camera_fps'] = fps_response
     camera_info_dict['camera_tint'] = tint_response
     camera_info_dict['camera_gain'] = gain
+    camera_info_dict['cropping_rows'] = cropping_rows
+    camera_info_dict['cropping_columns'] = cropping_columns
+
     return(camera_info_dict)
 
     

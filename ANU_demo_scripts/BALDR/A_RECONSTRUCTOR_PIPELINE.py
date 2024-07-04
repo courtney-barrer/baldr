@@ -40,8 +40,11 @@ DIT = 2e-3 #s integration time
 
 #sw = 8 # 8 for 12x12, 16 for 6x6 
 #pupil_crop_region = [157-sw, 269+sw, 98-sw, 210+sw ] #[165-sw, 261+sw, 106-sw, 202+sw ] #one pixel each side of pupil.  #tight->[165, 261, 106, 202 ]  #crop region around ZWFS pupil [row min, row max, col min, col max] 
-readout_mode = '12x12' # '6x6'
-pupil_crop_region = pd.read_csv('/home/baldr/Documents/baldr/ANU_demo_scripts/BALDR/' + f'T1_pupil_region_{readout_mode}.csv',index_col=[0])['0'].values.astype(int)
+
+#readout_mode = '12x12' # '6x6'
+#pupil_crop_region = pd.read_csv('/home/baldr/Documents/baldr/ANU_demo_scripts/BALDR/' + f'T1_pupil_region_{readout_mode}.csv',index_col=[0])['0'].values.astype(int)
+pupil_crop_region = [None,None,None,None]
+
 #init our ZWFS (object that interacts with camera and DM)
 zwfs = ZWFS.ZWFS(DM_serial_number='17DW019#053', cameraIndex=0, DMshapes_path = '/home/baldr/Documents/baldr/ANU_demo_scripts/BALDR/DMShapes/', pupil_crop_region=pupil_crop_region ) 
 
@@ -52,6 +55,11 @@ zwfs = ZWFS.ZWFS(DM_serial_number='17DW019#053', cameraIndex=0, DMshapes_path = 
 
 zwfs.set_camera_fps(fps) # set the FPS 
 zwfs.set_camera_dit(DIT) # set the DIT 
+
+# cropped columns must be multiple of 32 - multiple of 32 minus 1
+# cropped rows must be multiple of 4 - multiple of 4 minus 1
+zwfs.set_camera_cropping(r1=152, r2=267, c1=96, c2=255) # 
+
 
 ##
 ##    START CAMERA 
@@ -67,6 +75,7 @@ pupil_ctrl = pupil_control.pupil_controller_1(config_file = None)
 # 1.2) analyse pupil and decide if it is ok
 pupil_report = pupil_control.analyse_pupil_openloop( zwfs, debug = True, return_report = True)
 
+# issue with this ^^ when using camera cropping modes...??
 
 # write to a pickle file 
 with open(data_path + pupil_classification_filename , 'wb') as handle:
@@ -90,8 +99,6 @@ usr_label = input('give a descriptive name for reconstructor fits file')
 # desired DM amplitude (normalized between 0-1) full DM pitch ~3.5um
 desired_amp = -0.03
 reconstruction_method = 'act_poke'
-
-
 
 light_fits = False # do we want to discard intermediate results and assumptions in our reconstructor fits file? 
 
@@ -137,7 +144,7 @@ if debug:
 
     actN = 65 # look at DM actuator 65
     # find where we get peak influence in WFS for small amplitude push
-    peak_idx = np.unravel_index( np.argmax( abs(mode_ramp[Nsamp//2-1][actN] - I0 )) , I0.shape)
+    peak_idx = np.unravel_index( np.argmax( abs(mode_ramp[Nsamp//2-1][actN][1:,1:] - I0[1:,1:] )) , I0[1:,1:].shape) # we skip first row since first and second index are often used as frame counters 
     ax[2].set_title(f'WFS response from act{actN} poke on pixel {peak_idx}')
     ax[2].plot(poke_amps,(mode_ramp[:,actN,:,:] - I0 )[:,*peak_idx] )
     ax[2].set_ylabel( r'$frac{I[x,y] - I0[x,y]}{N0[x,y]}$' )
@@ -147,9 +154,9 @@ if debug:
 
 # ============== READ IN PUPIL CLASSIFICATION DATA
 
-
 with open(data_path + pupil_classification_filename, 'rb') as handle:
     pup_classification = pickle.load(handle)
+
 
 # see pupil region classifications 
 if debug:
@@ -183,6 +190,7 @@ plt.figure();plt.imshow( util.get_DM_command_in_2D( G.T[-1] )  );plt.show()
 
 
 # define a filter for where our (circular) pupil is
+#pupil_filter =(I0>-100).reshape(-1) #pup_classification['pupil_pixel_filter']
 pupil_filter = pup_classification['pupil_pixel_filter']
 # If we just read the entire image (does matrix condition improve?)
 #pupil_filter = np.array([True for _ in range(len( pup_classification['pupil_pixel_filter'] ))])
@@ -196,7 +204,7 @@ for act_idx in range(mode_ramp.shape[1]):
     n0 = N0.reshape(-1)[pupil_filter]
     bi = bias.reshape(-1)[pupil_filter]
     # our signal is (I-I0)/sum(N0) defined in err_signal function  
-    signal =  list( err_signal(I, I0=i0, N0=n0, bias=bi))
+    signal =  list( err_signal(I, I0=i0,  bias=bi))
     IM.append(signal )
     #IM.append( ( (mode_ramp[amp_idx,act_idx ][cp_x1: cp_x2 , cp_y1: cp_y2] - ref_im[cp_x1: cp_x2 , cp_y1: cp_y2])/N0 ).reshape(-1)  ) 
 
@@ -313,8 +321,11 @@ if debug:
 #%% WRITE TO FITS 
 
 # headers to copy from ramp_data 
+# NOTE cropping_corners relates to full frame readout but and cropping post imaging
+#  cropping_rows, cropping_columns relates to actual camera cropping !
 headers2copy = ['CAMERA','camera_fps','camera_tint','camera_gain',\
-'cropping_corners_r1','cropping_corners_r2','cropping_corners_c1','cropping_corners_c2']
+'cropping_corners_r1','cropping_corners_r2','cropping_corners_c1','cropping_corners_c2',\
+'cropping_rows','cropping_columns']
 
 info_fits = fits.PrimaryHDU( [] ) #[pupil_classification_file,WFS_response_file] )
 
