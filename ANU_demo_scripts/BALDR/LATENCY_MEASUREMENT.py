@@ -19,7 +19,7 @@ import FliSdk_V2 as fli
 import bmc
 
 data_path = '/home/baldr/Documents/baldr/ANU_demo_scripts/BALDR/data/' 
-
+fig_path = '/home/baldr/Documents/baldr/ANU_demo_scripts/BALDR/figures/' 
 
 """
 class CroppingData(ctypes.Structure):
@@ -89,12 +89,22 @@ test = fli.GetRawImageAsNumpyArray( camera , -1)
 
 fli.FliSerialCamera.SendCommand(camera, "set cropping off")
 # cropped columns must be multiple of 32 - multiple of 32 minus 1
-fli.FliSerialCamera.SendCommand(camera, "set cropping columns 64-287")
-#fli.FliSerialCamera.SendCommand(camera, "set cropping columns 96-255")
+#fli.FliSerialCamera.SendCommand(camera, "set cropping columns 64-287")
+fli.FliSerialCamera.SendCommand(camera, "set cropping columns 96-255")
 # cropped rows must be multiple of 4 - multiple of 4 minus 1
-fli.FliSerialCamera.SendCommand(camera, "set cropping rows 120-299")
-#fli.FliSerialCamera.SendCommand(camera, "set cropping rows 152-267")
+#fli.FliSerialCamera.SendCommand(camera, "set cropping rows 120-299")
+fli.FliSerialCamera.SendCommand(camera, "set cropping rows 152-267")
 fli.FliSerialCamera.SendCommand(camera, "set cropping on")
+
+camera_err_flag, maxfps = fli.FliSerialCamera.SendCommand(camera, "maxfps")
+
+print( f'min fps {maxfps}') 
+
+# set it
+# 2800Hz frame rate 
+fli.FliSerialCamera.SetFps(camera,float(maxfps.split(': ')[1]) )
+
+print( 'current DIT = ', fli.FliSerialCamera.SendCommand(camera, "tint raw") )
 
 camera_err_flag, minDIT = fli.FliSerialCamera.SendCommand(camera, "mintint raw")
 camera_err_flag, maxDIT = fli.FliSerialCamera.SendCommand(camera, "maxtint raw")
@@ -102,14 +112,14 @@ camera_err_flag, maxDIT = fli.FliSerialCamera.SendCommand(camera, "maxtint raw")
 print( f'max int {1e3 * float(maxDIT)}ms') 
 print( f'min int {1e3 * float(minDIT)}ms') 
 
+_,fps = fli.FliSerialCamera.GetFps(camera) #Hz 
+_, DIT = fli.FliSerialCamera.SendCommand(camera, "tint raw") #s
+
 # 3ms integration time (3.3kHz)
-fli.FliSerialCamera.SendCommand(camera, "set tint " + str(0.0003))
+#fli.FliSerialCamera.SendCommand(camera, "set tint " + str(0.0003))
 #fli.FliSerialCamera.SendCommand(camera, "set tint " + str(0.0001))
 
-# 2800Hz frame rate 
-fli.FliSerialCamera.SetFps(camera, 5100)
-
-print( 'fps = ', fli.FliSerialCamera.GetFps(camera) ) 
+print( 'fps = ', fps, 'DIT=', DIT  ) 
 # 4864Hz frame rate
  
 # tag images to count frames
@@ -195,12 +205,12 @@ cmd_list = [cmd_1,cmd_2]
 
 # get reference images with the DM in each state 
 dm.send_data(cmd_list[0])
-time.sleep(.5)
+time.sleep(1)
 I0 = fli.GetRawImageAsNumpyArray( camera , -1) 
-time.sleep(.5)
+time.sleep(1)
 ref_img_1 = fli.GetRawImageAsNumpyArray( camera , -1) 
 dm.send_data(cmd_list[1])
-time.sleep(.5)
+time.sleep(1)
 ref_img_2 = fli.GetRawImageAsNumpyArray( camera , -1) 
 
 # check reference images 
@@ -212,56 +222,131 @@ ax[1].set_title('poke')
 plt.show()
 
 img_list = [] #list to hold images
-t0_list=[]
-t1_list=[]
-flag_list=[]
+t0_im_list=[] #begin to get last image
+t1_im_list=[] #finished getting last frame
+t0_dm_list=[] # begin to actuate DM
+t1_dm_list=[] # finish actuating DM 
+flag_list=[] #if DM is poked (1) or flat (0)
 
 j=0 # used to calculate flag
 flag=0 #jumps between 1, 0 for on, off pokes
-
+change_every = 100 # update dm every X iterations 
 for i in range(1000):
-    t0_list.append( time.time() ) 
+    t0_im_list.append( time.time() ) 
     img_list.append( fli.GetRawImageAsNumpyArray( camera , -1) ) 
+    t1_im_list.append( time.time() )
     flag_list.append(flag) 
     #print(flag_list[-1])
-    if np.mod(i,10)==0: # change DM state every 10 iterations
+    if np.mod(i,change_every)==0: # change DM state every 10 iterations
+        #if img_list[-1][0,0] - img_list[-2][0,0] > 0: # 
         j+=1
         flag = np.mod(j,2)  
-        #print(i, j, flag) 
+        #print(i, j, flag)
+        t0_dm_list.append( time.time() )
         dm.send_data(cmd_list[flag])
+        t1_dm_list.append( time.time() )
+
+# frame number (first pixel in image encodes the frame number)
+frame_no = [i[0,0] for i in img_list]
+
+out_dict = {'fps':fps, 'DIT':DIT, 'frame_no':np.array(frame_no)-frame_no[0], 't0_img':list(np.array(t0_im_list)-t0_im_list[0]), 't1_img':list(np.array(t1_im_list)-t0_im_list[0]),'t0_dm':list(np.array(t0_dm_list)-t0_im_list[0]),'t1_dm':list(np.array(t1_dm_list)-t0_im_list[0]), 'I0':I0, 'img_list':img_list, 'flag_list':flag_list} 
+
+with open(data_path + f'latency_test_FPS-{round(float(fps),1)}_DIT-{round(1e3*float(DIT),3)}ms_pokeDM_every_{change_every}iters.pickle','wb') as handle:
+    pickle.dump(out_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
     
-    t1_list.append( time.time() )
+
+#%% =========================== read it in 
+with open(data_path + f'latency_test_FPS-{round(float(fps),1)}_DIT-{round(1e3*float(DIT),3)}ms_pokeDM_every_{change_every}iters.pickle', 'rb') as handle:
+    out_dict = pickle.load(handle)
 
 
+fps = out_dict['fps']
+DIT = out_dict['DIT']
+
+frame_no = np.array(out_dict['frame_no'])
+
+t0_img = np.array(out_dict['t0_img']) # begining of getting latest frame from camera 
+t1_img = np.array(out_dict['t1_img']) # end of getting latest frame from camera 
+
+t0_dm = np.array(out_dict['t0_dm']) # begining of poking dm
+t1_dm = np.array(out_dict['t1_dm']) # end of poking dm
+
+I0 = np.array(out_dict['I0']) # reference intensity with "flat" dm 
+img_list = np.array(out_dict['img_list']) # list of saved images each iteration 
+
+flag_list = np.array(out_dict['flag_list']) # flag to indicate if DM is poked or flat (jumps between 1, 0 for on, off pokes)
+
+
+# check how long to update frame (=fps?)
+plt.plot( t0_img[:40]*1e6, frame_no[:40] ,'.')
+plt.xlabel('time (us)')
+plt.ylabel('frame #')
+plt.show()
 
 # peak pixel change for act 65 around row 77,  col 97
-pv = np.array([i[77,97] - I0[77,97] for i in img_list])
+#pv = np.array([i[77,97] - I0[77,97] for i in img_list])
+pv = np.array([i[45,65] - I0[45,65] for i in img_list])
+pv[pv > 60000] = 0
 
-i0 = 700
-i1 = 760 
-t0 = np.array(t0_list[i0:i1 ])-t0_list[0]
-t1 = np.array(t1_list[i0:i1])-t0_list[0]
-plt.plot(t0, pv[i0:i1]/np.max(pv[:100]) , label='pixel val')
-plt.plot( t0, flag_list[i0:i1] ,'.', label='flag begin')
-plt.plot( t1, flag_list[i0:i1] ,'.', label='flag end')
-start_triggers = t0[np.where( np.diff( flag_list[i0:i1] ) )[0]]
-end_triggers = t1[np.where( np.diff( flag_list[i0:i1] ) )[0]]
-for trig in start_triggers:
-    plt.axvline( trig ,color='green') 
-for trig in end_triggers:
-    plt.axvline( trig , color='red') 
+i0 = 100
+i1 = 460 
+
+plt.plot(t0_img[i0:i1], pv[i0:i1]/np.max(pv[i0:i1]) , '.',label='norm. pixel value')
+
+new_frame_times = t1_img[np.where( np.diff( frame_no ) )] # at end of grabbing 
+for i,trig in enumerate(new_frame_times):
+    if i!=0:
+        plt.axvline( trig , color='k',linestyle='-',alpha=0.9) 
+    else:
+        plt.axvline( trig , color='k',linestyle='-',alpha=0.9, label='new frame') 
+"""
+for i,trig in enumerate(t0_img[i0:i1]):
+    if i!=0:
+        plt.axvline( trig , color='blue',linestyle=':',alpha=0.1) 
+    else:
+        plt.axvline( trig , color='blue',linestyle=':',alpha=0.1, label='get frame') 
+for i,trig in enumerate(t1_img[i0:i1]):
+    if i!=0:
+        plt.axvline( trig , color='black',linestyle=':',alpha=0.1) 
+    else:
+        plt.axvline( trig , color='black',linestyle=':',alpha=0.1, label='got frame') 
+"""
+for i,trig in enumerate(t0_dm[(t0_dm >= t0_img[i0]) & (t0_dm <= t0_img[i1])]):
+    if i!=0:
+        plt.axvline( trig , color='green') 
+    else:
+        plt.axvline( trig , color='green', label='send DM command') 
+for i,trig in enumerate(t1_dm[(t1_dm >= t0_img[i0]) & (t1_dm <= t0_img[i1])]):
+    if i!=0:
+        plt.axvline( trig , color='red') 
+    else:
+        plt.axvline( trig , color='red', label='DM command sent') 
+
+
+plt.xlim([t0_img[i0],t0_img[i1]])
 plt.ylim([-0.2,1.2])
-plt.legend()
+plt.xlabel('time [s]') 
+plt.ylabel('normalized intensity')
+plt.title(f'FPS={round(float(fps),1)}Hz, DIT={round(1e3*float(DIT),3)}ms')
+plt.legend() #bbox_to_anchor=(1,1))
+plt.savefig(fig_path + f'latency_test_FPS-{round(float(fps),1)}_DIT-{round(1e3*float(DIT),3)}ms_pokeDM_every_{change_every}iters.png',bbox_inches='tight',dpi=300)
 plt.show()
 
 
-out_dict = {'t0':list(np.array(t0_list)-t0_list[0]), 't1':list(np.array(t1_list)-t1_list[0]),'I0':I0, 'img_list':img_list, 'flag_list':flag_list} 
+print( f'latency < {np.mean( t1_dm - t0_dm )*1e6}us' )
 
-with open(data_path + 'latency_test_2.pickle','wb') as handle:
-    pickle.dump(out_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 print( 'mean delta t = ' , np.mean(np.diff(out_dict['t0'])) )
 print( 'median delta t = ' , np.median(np.diff(out_dict['t0'])) )
+
+img_std = np.array([np.std(i) for i in img_list])
+img_std /= (np.max(img_std)-np.min(img_std))
+
+plt.figure()
+plt.plot( frame_no, (img_std-np.min(img_std) )/ (np.max(img_std)-np.min(img_std)) ,'.',label='norm std in img')
+plt.plot( frame_no, flag_list ,'.',label='poked DM?')
+plt.legend()
+plt.show()
 
 
 #testcrop = fli.GetCroppingState(camera)[-1]._fields_
