@@ -135,6 +135,99 @@ def get_DM_command_in_2D(cmd,Nx_act=12):
     return( np.array(cmd_in_2D).reshape(Nx_act,Nx_act) )
 
 
+
+def circle(radius, size, circle_centre=(0, 0), origin="middle"):
+    
+    """
+    Adopted from AO tools with edit that we can use size as a tuple of row_size, col_size to include rectangles 
+    
+    Create a 2-D array: elements equal 1 within a circle and 0 outside.
+
+    The default centre of the coordinate system is in the middle of the array:
+    circle_centre=(0,0), origin="middle"
+    This means:
+    if size is odd  : the centre is in the middle of the central pixel
+    if size is even : centre is in the corner where the central 4 pixels meet
+
+    origin = "corner" is used e.g. by psfAnalysis:radialAvg()
+
+    Examples: ::
+
+        circle(1,5) circle(0,5) circle(2,5) circle(0,4) circle(0.8,4) circle(2,4)
+          00000       00000       00100       0000        0000          0110
+          00100       00000       01110       0000        0110          1111
+          01110       00100       11111       0000        0110          1111
+          00100       00000       01110       0000        0000          0110
+          00000       00000       00100
+
+        circle(1,5,(0.5,0.5))   circle(1,4,(0.5,0.5))
+           .-->+
+           |  00000               0000
+           |  00000               0010
+          +V  00110               0111
+              00110               0010
+              00000
+
+    Parameters:
+        radius (float)       : radius of the circle
+        size (int)           : tuple of row  and column size of the 2-D array in which the circle lies
+        circle_centre (tuple): coords of the centre of the circle
+        origin (str)  : where is the origin of the coordinate system
+                               in which circle_centre is given;
+                               allowed values: {"middle", "corner"}
+
+    Returns:
+        ndarray (float64) : the circle array
+    """
+	
+    size_row , size_col = size
+    # (2) Generate the output array:
+    C = np.zeros((size_row, size_col))
+
+    # (3.a) Generate the 1-D coordinates of the pixel's centres:
+    # coords = np.linspace(-size/2.,size/2.,size) # Wrong!!:
+    # size = 5: coords = array([-2.5 , -1.25,  0.  ,  1.25,  2.5 ])
+    # size = 6: coords = array([-3. , -1.8, -0.6,  0.6,  1.8,  3. ])
+    # (2015 Mar 30; delete this comment after Dec 2015 at the latest.)
+
+    # Before 2015 Apr 7 (delete 2015 Dec at the latest):
+    # coords = np.arange(-size/2.+0.5, size/2.-0.4, 1.0)
+    # size = 5: coords = array([-2., -1.,  0.,  1.,  2.])
+    # size = 6: coords = array([-2.5, -1.5, -0.5,  0.5,  1.5,  2.5])
+
+    coords_r = np.arange(0.5, size_row, 1.0)
+    coords_c = np.arange(0.5, size_col, 1.0)
+    # size = 5: coords = [ 0.5  1.5  2.5  3.5  4.5]
+    # size = 6: coords = [ 0.5  1.5  2.5  3.5  4.5  5.5]
+
+    # (3.b) Just an internal sanity check:
+    if len(coords_r) != size_row:
+        print('opps')
+
+    # (3.c) Generate the 2-D coordinates of the pixel's centres:
+    x, y = np.meshgrid(coords_c, coords_r)
+
+    # (3.d) Move the circle origin to the middle of the grid, if required:
+    if origin == "middle":
+        x -= size_col / 2.
+        y -= size_row / 2.
+
+    # (3.e) Move the circle centre to the alternative position, if provided:
+    x -= circle_centre[0]
+    y -= circle_centre[1]
+
+    # (4) Calculate the output:
+    # if distance(pixel's centre, circle_centre) <= radius:
+    #     output = 1
+    # else:
+    #     output = 0
+    mask = x * x + y * y <= radius * radius
+    C[mask] = 1
+
+    # (5) Return:
+    return C
+
+
 def shift(xs, n, m, fill_value=np.nan):
     # shifts a 2D array xs by n rows, m columns and fills the new region with fill_value
 
