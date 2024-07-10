@@ -306,6 +306,21 @@ class ZWFS():
         FliSdk_V2.FliSerialCamera.SendCommand(self.camera, f"set cropping rows {r1}-{r2}")
         FliSdk_V2.FliSerialCamera.SendCommand(self.camera, "set cropping on")
     
+    def deactive_cropping(self):
+        FliSdk_V2.FliSerialCamera.SendCommand(self.camera, "set cropping off")
+
+    def shutdown(self):
+        FliSdk_V2.FliSerialCamera.SendCommand(self.camera, "shutdown")
+
+    def enable_frame_tag(self, tag = True):
+        if tag:
+            FliSdk_V2.FliSerialCamera.SendCommand(self.camera, "set imagetags on")
+        else:
+            FliSdk_V2.FliSerialCamera.SendCommand(self.camera, "set imagetags off")
+
+    def restore_default_settings(self): 
+        FliSdk_V2.FliSerialCamera.SendCommand(self.camera, "restorefactory")
+
     def update_pupil_pixel_filter(self): 
         # updates self.pupil_pixel_filter, self.pupil_pixels, 
         # Need to decide if we also have to update central reference points here? - I dont think so

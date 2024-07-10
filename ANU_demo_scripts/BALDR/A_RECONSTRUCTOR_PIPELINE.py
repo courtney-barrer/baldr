@@ -31,7 +31,7 @@ def err_signal(I, I0, bias, norm_flux=None):
 tstamp = datetime.datetime.now().strftime("%d-%m-%YT%H.%M.%S")
 
 # define filenames for the pupil classification file and pokeramp file to write and read in when constructing reconstructor.
-pupil_classification_filename = 'pupil_classification_{tstamp}.pickle'
+pupil_classification_filename = f'pupil_classification_{tstamp}.pickle'
 pokeramp_filename = f'pokeramp_data_{tstamp}.fits'
 
 debug = True # plot some intermediate results 
@@ -43,10 +43,20 @@ DIT = 2e-3 #s integration time
 
 #readout_mode = '12x12' # '6x6'
 #pupil_crop_region = pd.read_csv('/home/baldr/Documents/baldr/ANU_demo_scripts/BALDR/' + f'T1_pupil_region_{readout_mode}.csv',index_col=[0])['0'].values.astype(int)
+
+
+#  
 pupil_crop_region = [None,None,None,None]
+#pupil_crop_region = [157, 350, 0, 400] # bullshit region 
 
 #init our ZWFS (object that interacts with camera and DM)
 zwfs = ZWFS.ZWFS(DM_serial_number='17DW019#053', cameraIndex=0, DMshapes_path = '/home/baldr/Documents/baldr/ANU_demo_scripts/BALDR/DMShapes/', pupil_crop_region=pupil_crop_region ) 
+
+# SOMETIMES IF CROPPING YOU WILL NEED TO RESET BEFORE HAND 
+# USE zwfs.restore_default_settings()
+
+#restore default settings of camera
+#zwfs.restore_default_settings()
 
 # ,------------------ AVERAGE OVER 8X8 SUBWIDOWS SO 12X12 PIXELS IN PUPIL
 #zwfs.pixelation_factor = sw #8 # sum over 8x8 pixel subwindows in image
@@ -58,8 +68,9 @@ zwfs.set_camera_dit(DIT) # set the DIT
 
 # cropped columns must be multiple of 32 - multiple of 32 minus 1
 # cropped rows must be multiple of 4 - multiple of 4 minus 1
-zwfs.set_camera_cropping(r1=152, r2=267, c1=96, c2=255) # 
-
+#zwfs.set_camera_cropping(r1=152, r2=267, c1=96, c2=255) # 
+zwfs.set_camera_cropping(r1=152, r2=267, c1=96, c2=223)
+zwfs.enable_frame_tag(tag = False) # first 1-3 pixels count frame number etc
 
 ##
 ##    START CAMERA 
@@ -73,9 +84,12 @@ util.watch_camera(zwfs)
 pupil_ctrl = pupil_control.pupil_controller_1(config_file = None)
 
 # 1.2) analyse pupil and decide if it is ok
-pupil_report = pupil_control.analyse_pupil_openloop( zwfs, debug = True, return_report = True)
+pupil_report = pupil_control.analyse_pupil_openloop( zwfs, debug = True, return_report = True,symmetric_pupil=True)
 
 # issue with this ^^ when using camera cropping modes...??
+
+## I NEED TO UPDATE THIS TO ZWFS OBJECT!!! 
+zwfs.update_reference_regions_in_img( pupil_report ) # 
 
 # write to a pickle file 
 with open(data_path + pupil_classification_filename , 'wb') as handle:
@@ -162,9 +176,10 @@ with open(data_path + pupil_classification_filename, 'rb') as handle:
 if debug:
     # If you want to check
     fig,ax = plt.subplots(1,5,figsize=(20,4))
-    ax[0].imshow( pup_classification['pupil_pixel_filter'].reshape( cp_x2-cp_x1, cp_y2-cp_y1) )
-    ax[1].imshow( pup_classification['outside_pupil_pixel_filter'].reshape( cp_x2-cp_x1, cp_y2-cp_y1) )
-    ax[2].imshow( pup_classification['secondary_pupil_pixel_filter'].reshape( cp_x2-cp_x1, cp_y2-cp_y1) )
+
+    ax[0].imshow( pup_classification['pupil_pixel_filter'].reshape(I0.shape))# cp_x2-cp_x1, cp_y2-cp_y1) )
+    ax[1].imshow( pup_classification['outside_pupil_pixel_filter'].reshape(I0.shape))#( cp_x2-cp_x1, cp_y2-cp_y1) )
+    ax[2].imshow( pup_classification['secondary_pupil_pixel_filter'].reshape(I0.shape))#( cp_x2-cp_x1, cp_y2-cp_y1) )
     ax[3].imshow( I0-bias )
     ax[4].imshow( N0-bias )
     
@@ -200,7 +215,7 @@ for act_idx in range(mode_ramp.shape[1]):
     # each row is flattened (I-I0) / N0 signal
     # intensity from a given actuator push
     I = mode_ramp[amp_idx,act_idx ].reshape(-1)[pupil_filter]
-    i0 = I0.reshape(-1)[pupil_filter]
+    i0 = I0.reshape(-1)[pupil_filter] / np.sum( I0 )
     n0 = N0.reshape(-1)[pupil_filter]
     bi = bias.reshape(-1)[pupil_filter]
     # our signal is (I-I0)/sum(N0) defined in err_signal function  
@@ -236,7 +251,7 @@ if 1:# debug :
         tmp = pupil_filter.copy()
         vtgrid = np.zeros(tmp.shape)
         vtgrid[tmp] = Vt[i]
-        axx.imshow( vtgrid.reshape( cp_x2-cp_x1,cp_y2-cp_y1) )
+        axx.imshow( vtgrid.reshape(I0.shape ) #cp_x2-cp_x1,cp_y2-cp_y1) )
         #axx.set_title(f'\n\n\nmode {i}, S={round(S[i]/np.max(S),3)}',fontsize=5)
         axx.text( 10,10,f'{i}',color='w',fontsize=4)
         axx.text( 10,20,f'S={round(S[i]/np.max(S),3)}',color='w',fontsize=4)

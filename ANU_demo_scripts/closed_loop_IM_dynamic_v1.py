@@ -126,7 +126,7 @@ if plot_all: #plotting DM eigenmodes to see which to filter
 
 #S_filt = S > S[ np.min( np.where( abs(np.diff(S)) < 1e-2 )[0] ) ]
 S_filt = S > S[ 20 ]
-#S_filt[0] = False # FILTER FIRST MODE !!!!
+S_filt[0] = [False, False] # FILTER FIRST MODE !!!!
 Sigma = np.zeros( np.array(IM).shape, float)
 np.fill_diagonal(Sigma, 1/IM_pokeamp * S[S_filt], wrap=False) #
 
@@ -253,7 +253,7 @@ dm.send_data( flat_dm_cmd + disturbance_cmd )
 time.sleep(1)
 FliSdk_V2.Start(camera)    
 time.sleep(1)
-for i in range(500):
+for i in range(2000):
 
     # get new image and store it (save pupil and psf differently)
     IMG_list.append( list( np.median( bdf.get_raw_images(camera, number_of_frames=number_images_recorded_per_cmd, cropping_corners=cropping_corners) , axis=0)  ) )
@@ -297,7 +297,8 @@ for i in range(500):
     dm.send_data( CMD_list[-1] + disturbance_cmd )
 
     time.sleep(0.01)
-
+    if interp_deflection_4x4act( RMS_list[-1] ) > 300:
+        break
 dm.send_data(flat_dm_cmd)
 
 

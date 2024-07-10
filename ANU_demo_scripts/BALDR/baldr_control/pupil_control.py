@@ -141,6 +141,11 @@ def analyse_pupil_openloop( zwfs, debug = True, return_report = True, symmetric_
     intensity_threshold =  np.median( intensity_bins ) - 1.*np.std(intensity_bins) #np.median( intensity_edges ) 
 
     pupil_filter = img.reshape(-1) > intensity_threshold
+    
+    # for now just essentially copy pupil_filter with higher threshold
+    # TO REVIEW 
+    pupil_filter_tight = img.reshape(-1) > 1.1 * intensity_threshold
+    
 
     x_pupil_center, y_pupil_center = np.mean(X.reshape(-1)[pupil_filter]), np.mean(Y.reshape(-1)[pupil_filter])
 
@@ -345,7 +350,7 @@ def analyse_pupil_openloop( zwfs, debug = True, return_report = True, symmetric_
         # we force secondary_pupil_filter to be circle 
         secondary_diam = np.sum( 0 < np.sum(secondary_pupil_filter,axis=0) )  
 
-        secondary_pupil_filter = aotools.functions.pupil.circle(radius=secondary_diam//2, size=N0.shape[0], circle_centre=(x_sec_pupil_center, y_sec_pupil_center), origin='middle').astype(bool)
+        secondary_pupil_filter = util.circle(radius=secondary_diam//2, size=N0.shape, circle_centre=(x_sec_pupil_center, y_sec_pupil_center), origin='middle').astype(bool)
 
 
     secondary_pupil_filter = secondary_pupil_filter.reshape(-1) #make sure its flattened
